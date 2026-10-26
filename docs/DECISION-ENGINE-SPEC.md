@@ -93,14 +93,16 @@ degraded behaviour, not an error state.
 load is watts, integer. Times are local, ISO 8601; durations are seconds.
 
 **S-2.2** Rooms: `Living Room`, `Kitchen`, `Bedroom`, `Balcony`. Appliances:
-`ac_living`, `ac_bedroom`, `purifier`, `range_hood`, `oven`, `fridge`, `washer`,
-`dryer`, `dehumidifier`.
+`ac_living`, `ac_bedroom`, `ac_kitchen`, `purifier`, `range_hood`, `oven`,
+`cooktop`, `fridge`, `washer`, `dryer`, `dehumidifier`.
 
-**S-2.3** *The kitchen has no air conditioner.* This is a physical fact about
-the deployment, not a simplification: Korean apartments put AC in the living
-room and the bedrooms. The kitchen is observed through the **fridge**
-(`external_temp`, `duty_cycle`) and actuated through the **range hood**. Any
-clause that assumes a kitchen AC is wrong.
+**S-2.3** *The kitchen is observed through its fridge, not through its AC.* An
+air conditioner reports the setpoint it was told; the fridge reports the room it
+stands in — `external_temp` plus the compressor's `duty_cycle`, both of which a
+real LG fridge exposes through ThinQ. The AC (`ac_kitchen`) is an actuator, not
+a thermometer: it is the Tier-1 answer to "pre-cool a room before cooking", while
+the range hood (`range_hood`) is the answer to heat that has already arrived.
+Any clause that reads the kitchen's temperature from an AC is wrong.
 
 ---
 
@@ -274,6 +276,8 @@ a suggestion. The decision layer may take some, reorder, or take none.
 | mold | purifier off | `purifier_on` | 1 |
 | thermal | dryer is running | `delay_dryer` | 2 |
 | thermal | range hood off | `ventilate_kitchen` | 1 |
+| thermal | a cooking session starts within 30 min and the kitchen AC is off | `precool_kitchen` | 1 |
+| thermal | a cooking session starts within 30 min and the cooktop is off | `preheat_cooktop` | 2 |
 
 **S-5.3 `delay_dryer` carries a restart job**: dryer off now, back on at the
 next **23:00** local, one-shot. The job is created **only if the user confirms**
@@ -287,22 +291,26 @@ claims and does not have.
 | Tier 1 — automatic | Tier 2 — approval required |
 |---|---|
 | `ventilate_washer` | `delay_dryer` |
-| `dehumidifier_on` | |
+| `dehumidifier_on` | `preheat_cooktop` |
 | `purifier_on` | |
 | `ventilate_kitchen` | |
+| `precool_kitchen` | |
 
-Two kinds that appeared in earlier drafts are gone: `reschedule_washer` and
-`preheat_cooktop`. The proposal lists "delaying a laundry cycle or warming up
-cooktops" as *examples* of Tier-2 work, not as required actions; the realised
-schedule shift is `delay_dryer`, and the appliance set has no cooktop to warm.
-Reinstating either is a feature, and it starts in S-5.2.
+The two examples the proposal gives for §II.C are both realised here, and they
+come from the same calendar event: `precool_kitchen` is the "pre-cooling a room
+before cooking" the house does on its own, `preheat_cooktop` is the "warming up
+cooktops" it asks about. One kind from an earlier draft is still gone:
+`reschedule_washer` — no rule would ever want to move the washer, so the entry
+was a claim with nothing behind it.
 
 **S-5.5 Default deny.** Any action kind not in the table is **Tier 2**. A typo,
 a future kind, or a hallucinated kind cannot become automatic by being unknown.
 
 **S-5.6 Why the line falls here.** Tier 1 worst case is a slightly dry room or a
-fan running for nothing. Tier 2 worst case is a ruined garment or a delayed
-meal. The boundary is *reversibility*, not power draw.
+fan running for nothing. Tier 2 worst case is a ruined garment, a delayed meal,
+or a hot surface with nobody in front of it. The boundary is *reversibility and
+who is standing there*, not power draw — a 2.2 kW oven the user asked for is
+Tier 1 territory, and a hob switched on by nobody is not.
 
 ---
 
@@ -352,13 +360,27 @@ is a failure, and only the second should run the house on rules.
 engine. Chosen Tier-2 candidates become an approval request. There is no code
 path from model output to actuator that does not pass one of those two doors.
 
+**It also does not get to decide whether to ask.** Tier-2 candidates reach the
+approval queue whether or not the model kept them, because whether to *ask* is a
+policy question and the user, not the model, decides what runs. Measured: given
+a candidate that switches on a heating appliance, `glm-4-flash` left it off the
+list in **15 runs out of 15** — across four framings (cooktop, oven, "the
+resident is standing there", cooking five or nineteen minutes away) and with the
+caution removed from the prompt. That is the model's own judgement rather than a
+prompt artefact, and it is not wrong; but if it decided the question, a cooking
+session on the calendar would be silently ignored and the product's claim would
+depend on the model happening to agree. The model keeps the part where its
+judgement earns its keep: *which* Tier-1 actions are worth doing now. A "no", or
+the fail-safe running out, buys `quiet_seconds = 1800` of silence for that risk
+kind — asking again three minutes later is not respect.
+
 **S-6.8 Wording is a template, not a generation.** Two sentences are shown to
 the user, and neither is written by the model:
 
 | Message | Shape |
 |---|---|
 | Tier-1 report | *"The washing machine has been shut for 2 hours with wet washing still inside it. So I started drum micro-ventilation on the washer and turned on the balcony dehumidifier."* |
-| Tier-2 question | *"The kitchen is at 32 °C and the dryer is adding heat. I would like to turn the dryer off now and restart it at 11 PM tonight. Shall I? Reply yes or no — no answer in 5 minutes keeps everything as it is."* |
+| Tier-2 question | *"The kitchen is at 32 °C and the dryer is adding heat. I would like to turn the dryer off now and restart it at 11 PM tonight; switch the cooktop on now so it is hot when you start. Shall I? Reply yes or no — no answer in 5 minutes keeps everything as it is."* |
 
 The index score, the extrapolation and the wattage stay in the message
 *payload*, where the audit trail and this document can read them. They were in
@@ -555,7 +577,7 @@ them Phase 2.
 | A-1 | `mold` scenario: drum 90%, sealed 2 h, door closed | MRI fires, score ≥ 50, prediction ≥ current | `test_mold_risk_fires_on_sealed_wet_drum` |
 | A-2 | door open | MRI returns `None` | `test_mold_risk_silent_when_door_open` |
 | A-3 | no cycle run | MRI returns `None` | `test_mold_risk_silent_when_no_cycle` |
-| A-4 | dryer running + bake within 30 min | TOI fires, `heat_load_w == 1800`, `oven_scheduled_in_min` present | `test_thermal_risk_fires_with_dryer_and_scheduled_oven` |
+| A-4 | dryer running + bake within 30 min | TOI fires, `heat_load_w == 1800`, `cooking_scheduled_in_min` present | `test_thermal_risk_fires_with_dryer_and_scheduled_oven` |
 | A-5 | nothing running, no calendar | TOI returns `None` | `test_thermal_risk_silent_when_no_heat` |
 | A-6 | mold risk | all candidates are Tier 1 | `test_mold_candidates_are_tier1` |
 | A-7 | thermal risk | candidates split across both tiers | `test_thermal_candidates_split_across_tiers` |

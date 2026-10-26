@@ -22,6 +22,7 @@ CAPABILITIES: dict[str, list[str]] = {
     "dehumidifier": ["power", "fan"],
     "range_hood": ["power", "fan"],
     "oven": ["power", "temperature"],
+    "cooktop": ["power"],
 }
 
 # A setpoint is not one range. 22 °C is a comfortable room and a fridge disaster;
@@ -58,6 +59,7 @@ TYPE_LABELS = {
     "robot_cleaner": "Robot Cleaner",
     "oven": "Oven",
     "range_hood": "Kitchen Range Hood",
+    "cooktop": "Cooktop",
 }
 
 MODE_LABELS = {

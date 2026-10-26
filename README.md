@@ -105,17 +105,18 @@ sensors.tick → MRI / TOI → policy.candidates → DECIDE → Tier 1: act, rep
 | Sensor stream | `app/sensors.py` | rooms, drum humidity, door sensors, power draw, calendar; JSONL + CSV to `data/sensors/` |
 | MRI | `app/risk.py` | Mold Risk Index — humidity × sealed time × warmth, with a 30-minute trend extrapolation |
 | TOI | `app/risk.py` | Thermal Overload Index — heat load vs the kitchen, read through the fridge, plus ovens that are *scheduled* but not yet on |
-| Tiers | `app/policy.py` | the whitelist: Tier 1 (ventilate, dehumidify, exhaust, purify) runs alone; Tier 2 (delay) never does |
+| Tiers | `app/policy.py` | the whitelist: Tier 1 (ventilate, dehumidify, exhaust, purify, pre-cool) runs alone; Tier 2 (move a schedule, preheat a hob) never does |
 | Approvals | `app/approval.py` | pending → confirmed / declined / **expired**. No answer in 5 minutes is a no |
 | The loop | `app/proactive.py` | ties it together and decides what the model is allowed to decide |
 
-**The kitchen has no air conditioner** — Korean apartments put them in the
-living room and bedrooms. So its thermal state is read the way a real
-deployment would read it: through the fridge. LG smart fridges report an
-external (room) temperature and expose the compressor's energy draw through
-ThinQ, and a compressor working harder is a kitchen getting hotter. The
+**The kitchen is read through its fridge, not its air conditioner.** An AC
+reports the setpoint it was told; the fridge reports the room it stands in. An
+LG smart fridge exposes an external temperature and the compressor's energy draw
+through ThinQ, and a compressor working harder is a kitchen getting hotter. The
 fridge is also the appliance that pays for that heat, which is why the index
-exists at all. The only Tier-1 actuator the kitchen has is the range hood.
+exists at all. Cooling is a separate job: the kitchen AC is the Tier-1 answer to
+"pre-cool a room before cooking", and the range hood is the answer to heat that
+has already arrived.
 
 **Voice is a channel, not the product.** The composer's mic button uses the
 browser's Web Speech API (KO by default, EN for demos) and the text box stays
@@ -134,6 +135,16 @@ validated against the candidate whitelist, and any parse failure falls back to
 the safe default (Tier 1 executes, Tier 2 is only proposed). It can be wrong
 about what to do; it cannot corrupt the house.
 
+**One thing it is not allowed to decide is whether to ask.** Given a candidate
+that switches on a heating appliance, glm-4-flash left it off the list in 15
+runs out of 15 — across four framings, with the caution removed from the prompt,
+and with the cooking five minutes away. That is not a prompt artefact; it is the
+model's own judgement that a house should not offer to light a hob, and it is
+not wrong. But if that judgement decided the question, a cooking session on the
+calendar would be silently ignored. So the rules decide what is put to the user
+and the user decides what runs. A "no", or the fail-safe running out, buys half
+an hour of silence: asking again three minutes later is not respect.
+
 **Run it:**
 
 ```
@@ -146,11 +157,13 @@ curl -X POST localhost:8848/api/approvals/<id>/confirm   # the only door into Ti
 ```
 
 The mold scenario ends with the washer ventilating and the balcony dehumidifier
-running, unprompted. The oven scenario turns on the kitchen range hood — the
-fridge's compressor is at 80% duty and the kitchen is climbing — and then asks
-*"I would like to turn the dryer off now and restart it at 11 PM tonight. Shall I?"*
-— aloud, because that question must not be missed. If nobody answers, the dryer
-keeps its schedule, which is the only honest reading of silence.
+running, unprompted. The oven scenario turns on the kitchen range hood and cools
+the kitchen to 24 °C — the fridge's compressor is at 80% duty and there is a bake
+on the calendar in 20 minutes — and then asks *"I would like to turn the dryer
+off now and restart it at 11 PM tonight; switch the cooktop on now so it is hot
+when you start. Shall I?"* — aloud, because that question must not be missed. If
+nobody answers, the dryer keeps its schedule and the hob stays cold, which is the
+only honest reading of silence.
 
 ---
 
@@ -237,10 +250,10 @@ feels. It decides from the request:
 - **A half-parsed comfort phrase** — *"it's stuffy"* — stays a question. The
   action is already known; only the room is missing, and no tool can read which
   room someone is standing in. Handed to the loop, it switched on the purifier.
-- **A complaint in a room with nothing to fix it** — *"it's stuffy in the
-  kitchen"* — is not patched onto whatever appliance happens to sit there. The
-  kitchen has a fridge and no air conditioner, so the answer names that instead
-  of asking a refrigerator to hold 24 °C.
+- **A complaint in a room with nothing to fix it** — *"the balcony is stuffy"*
+  — is not patched onto whatever appliance happens to sit there. The balcony has
+  a washer, a dryer and a dehumidifier, and none of them can cool a room, so the
+  answer names that instead of asking a washer to hold 24 °C.
 
 This ordering is the argument. Put tier 2 first unconditionally and it answers
 everything, plausibly, and the loop becomes dead code that still looks installed —
@@ -592,6 +605,14 @@ proactive-senior-care-comfort-agent/
 ---
 
 ## 5. Connecting real LG appliances
+
+**None of this is needed to run the project.** `device_backend` defaults to
+`mock`: the simulator owns the devices, and there is no LG account, no token and
+no hardware involved. Everything in sections 1–4, every test, and the course
+demo run that way. This section is here because the system claims to be an
+orchestration layer over the LG ecosystem, and a claim like that should be
+checkable rather than asserted — so the adapter exists and the path is written
+down. If you do not have LG appliances, skip to section 6.
 
 ### Step 1 — get a PAT
 

@@ -19,6 +19,7 @@ const ICON = {
   dehumidifier: "i-purifier",
   range_hood: "i-hood",
   oven: "i-hood",
+  cooktop: "i-cooktop",
 };
 
 const BACKEND_LABEL = { mock: "Simulator", thinq: "LG ThinQ" };

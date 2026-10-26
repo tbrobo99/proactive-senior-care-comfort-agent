@@ -91,6 +91,11 @@ def _join(items: list[str]) -> str:
         return ""
     if len(items) == 1:
         return items[0]
+    # A label can contain its own "and" ("turn the dryer off and restart it at
+    # 11 PM"). Joining those with another "and" gives one sentence with three
+    # of them, which reads as a single long instruction rather than two.
+    if any(" and " in i for i in items):
+        return "; ".join(items)
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
@@ -135,6 +140,11 @@ class ProactiveEngine:
         self.cfg = cfg
         self.tick_seconds = float(pcfg.get("tick_seconds", 1.0))
         self.cooldown_seconds = float(pcfg.get("cooldown_seconds", 180))
+        # How long the house stays quiet about a risk the user has already
+        # answered — "no", or the fail-safe running out. Without it, always
+        # putting the Tier-2 question to the user would mean asking the same
+        # question every five minutes for as long as the condition lasts.
+        self.quiet_seconds = float(pcfg.get("quiet_seconds", 1800))
         self.llm_decide = bool(pcfg.get("llm_decide", True)) and llm.available(cfg)
         # Off by default. The template question already names the situation, the
         # change, the deadline and the one-word answer; the model's version was
@@ -202,6 +212,7 @@ class ProactiveEngine:
 
         for ap in self.approvals.expire_due(now):
             events.append({"type": "expired", "approval": ap.id})
+            self._cooldown[ap.risk_kind] = time.monotonic() + self.quiet_seconds
             db.add_message("system",
                            f"\u23f3 I asked about {_devices(ap)} and did not hear back, "
                            f"so I changed nothing. Everything is as it was.",
@@ -217,7 +228,25 @@ class ProactiveEngine:
 
         chosen, decided_by = self._decide(r, cands, snap)
         tier1 = [c for c in chosen if policy.tier_of(c.kind) == policy.TIER1]
-        tier2 = [c for c in chosen if policy.tier_of(c.kind) == policy.TIER2]
+        # Tier 2 is not the model's to drop, and this is measured rather than
+        # assumed. Given a candidate that switches on a heating appliance, the
+        # model leaves it off the list in 15 runs out of 15, across four
+        # framings (cooktop, oven, "the resident is standing there", cooking 5
+        # or 19 minutes away) and with the caution removed from the prompt. It
+        # is not prompt-induced avoidance this time; it is the model's own
+        # judgement that lighting a hob is not something a house should offer,
+        # and it is not wrong.
+        #
+        # But whether to *ask* is a policy question, not a model question. If
+        # the model's caution decided it, a cooking session on the calendar
+        # would be silently ignored, and the product's whole claim — the house
+        # asks before it does something that matters — would depend on the
+        # model happening to agree. So the rules decide what is put to the user
+        # and the user decides what runs; the model keeps the part where its
+        # judgement is worth having, which is which Tier-1 actions are worth
+        # doing right now. Safety does not move either way: nothing here can
+        # execute a Tier-2 action, only `confirm()` can.
+        tier2 = [c for c in cands if policy.tier_of(c.kind) == policy.TIER2]
 
         executed = []
         for c in tier1:
@@ -394,6 +423,9 @@ class ProactiveEngine:
         ap = self.approvals.decline(approval_id)
         if not ap:
             return {"ok": False, "error": "no pending approval with that id"}
+        # No is an answer. Asking again in three minutes is not respect, it is
+        # a machine that did not listen.
+        self._cooldown[ap.risk_kind] = time.monotonic() + self.quiet_seconds
         db.add_message("system",
                        f"\u2717 All right \u2014 I left {_devices(ap)} as it was.",
                        {"approval": ap.to_dict()})

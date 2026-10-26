@@ -23,6 +23,8 @@ DEVICES = [
     {"id": "purifier", "name": "Living Room Purifier", "type": "air_purifier", "room": "Living Room"},
     {"id": "range_hood", "name": "Kitchen Range Hood", "type": "range_hood", "room": "Kitchen"},
     {"id": "oven", "name": "Kitchen Oven", "type": "oven", "room": "Kitchen"},
+    {"id": "ac_kitchen", "name": "Kitchen AC", "type": "air_conditioner", "room": "Kitchen"},
+    {"id": "cooktop", "name": "Kitchen Cooktop", "type": "cooktop", "room": "Kitchen"},
     {"id": "fridge", "name": "Kitchen Fridge", "type": "refrigerator", "room": "Kitchen"},
     {"id": "washer", "name": "Balcony Washer", "type": "washer", "room": "Balcony"},
     {"id": "dryer", "name": "Balcony Dryer", "type": "dryer", "room": "Balcony"},
@@ -37,6 +39,14 @@ DEFAULT_STATES = {
     "purifier": {"power": False, "fan": "auto", "pm25": 42},
     "range_hood": {"power": False, "fan": "auto"},
     "oven": {"power": False, "target_temp": 180},
+    # The kitchen's AC is the Tier-1 actuator for "pre-cooling a room before
+    # cooking" (poster §II.C). It is not the kitchen's thermometer — an AC
+    # reports the setpoint it was told, so the fridge probe below stays the
+    # sensor and this stays the hand.
+    "ac_kitchen": {"power": False, "mode": "cool", "target_temp": 24,
+                   "current_temp": 30.0, "humidity": 54, "fan": "auto"},
+    # A hob nobody is standing in front of. Reachable, and deliberately Tier 2.
+    "cooktop": {"power": False},
     # LG smart fridges report an external (room) temperature and expose the
     # compressor's energy draw through ThinQ. That pair is the kitchen's real
     # thermal signal — a kitchen in a Korean apartment has no AC of its own.

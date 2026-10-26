@@ -392,8 +392,8 @@ class ComfortDialogueTest(AgentTestBase):
         land on the Kitchen Fridge — the only appliance in that room — and the
         command layer refused `mode`, which reads as a broken assistant and is
         the last guardrail before a refrigerator is asked to hold 24 °C. The
-        kitchen still has no AC (Phase 2 vents it instead, and reads its
-        temperature through the fridge), so the balcony is the room to test."""
+        kitchen has an AC now, so the balcony — washer, dryer, dehumidifier, and
+        none of them able to cool a room — is the room to test."""
         r = self.agent.handle("the balcony is stuffy")
 
         self.assertEqual(r["intent_name"], "control")

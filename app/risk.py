@@ -10,17 +10,18 @@ least-squares slope over the recent drum-humidity history, projected 30 minutes
 ahead: the intervention is worth making when the drum will be worse later, not
 only when it is bad now.
 
-TOI — Thermal Overload Index. Heat-generating load (oven, dryer, dishwasher)
-measured against the room's ability to shed it, plus a calendar term: an oven
-scheduled within the next 30 minutes is a load that has not arrived yet, and
-ventilating before it does is only useful ahead of time.
+TOI — Thermal Overload Index. Heat-generating load (oven, cooktop, dryer,
+dishwasher) measured against the room's ability to shed it, plus a calendar
+term: a cooking session scheduled within the next 30 minutes is a load that has
+not arrived yet, and cooling or ventilating before it does is only useful ahead
+of time.
 
-The kitchen's temperature is read through the fridge, because that is how a
-real deployment would read it: Korean apartments put air conditioners in the
-living room and bedrooms, and an LG smart fridge reports an external
-temperature plus the compressor's duty cycle through ThinQ. A compressor
-working harder is a kitchen getting hotter — and the fridge is the appliance
-that pays for it, which is the whole reason this index exists.
+The kitchen's temperature is read through the fridge, not through its air
+conditioner: an AC reports the setpoint it was told, so it can say what it is
+doing and never what the room is. An LG smart fridge reports an external
+temperature plus the compressor's duty cycle through ThinQ, and a compressor
+working harder is a kitchen getting hotter — the fridge is the appliance that
+pays for it, which is the whole reason this index exists.
 
 Neither index is a black box and neither is trained. They are the cheap,
 deterministic part of the decision loop: they run every tick without an LLM in
@@ -36,8 +37,8 @@ MOLD_THRESHOLD = 50.0
 THERMAL_THRESHOLD = 50.0
 PREDICT_MINUTES = 30
 
-# Ovens scheduled this soon count as present load: ventilating after the fact
-# is just a fan running for nothing.
+# A cooking session this close counts as present load: cooling or ventilating
+# after the fact is just a fan running for nothing.
 CALENDAR_LOOKAHEAD_MIN = 30
 
 
@@ -134,7 +135,7 @@ def thermal_risk(snapshot: dict, history, now: datetime | None = None) -> Risk |
     fridge_external = float(fridge.get("external_temp") or kitchen_temp)
     fridge_duty = float(fridge.get("duty_cycle") or 0.0)
 
-    oven_soon = False
+    cooking_soon = False
     soonest = None
     for entry in snapshot.get("calendar") or []:
         try:
@@ -143,9 +144,9 @@ def thermal_risk(snapshot: dict, history, now: datetime | None = None) -> Risk |
             continue
         delta = (start - now).total_seconds() / 60.0
         if 0 <= delta <= CALENDAR_LOOKAHEAD_MIN and (soonest is None or delta < soonest):
-            soonest, oven_soon = delta, True
+            soonest, cooking_soon = delta, True
 
-    if heat_w <= 0 and not oven_soon:
+    if heat_w <= 0 and not cooking_soon:
         return None
 
     # Load ratio: 2500 W is a full kitchen; each degree above 27 °C is a room
@@ -155,7 +156,7 @@ def thermal_risk(snapshot: dict, history, now: datetime | None = None) -> Risk |
         heat_w / 25.0
         + max(0.0, kitchen_temp - 27.0) * 6.0
         + max(0.0, fridge_duty - 0.6) * 60.0
-        + (15.0 if oven_soon else 0.0)
+        + (15.0 if cooking_soon else 0.0)
     )
     series = history.get("Kitchen.temp") if history else None
     slope = slope_per_second(series) if series else 0.0
@@ -173,7 +174,7 @@ def thermal_risk(snapshot: dict, history, now: datetime | None = None) -> Risk |
             "kitchen_temp": round(kitchen_temp, 1),
             "fridge_external_temp": round(fridge_external, 1),
             "fridge_duty_cycle": round(fridge_duty, 2),
-            "oven_scheduled_in_min": round(soonest) if soonest is not None else None,
+            "cooking_scheduled_in_min": round(soonest) if soonest is not None else None,
             "temp_trend_per_min": round(slope * 60, 3),
             "user_home": snapshot["occupancy"].get("user_home", True),
         },

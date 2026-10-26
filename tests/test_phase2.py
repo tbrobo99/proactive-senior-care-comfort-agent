@@ -121,7 +121,7 @@ class RiskTest(Base):
         self.assertGreaterEqual(r.score, r.threshold)
         self.assertEqual(r.kind, "thermal")
         self.assertEqual(r.drivers["heat_load_w"], 1800)
-        self.assertIsNotNone(r.drivers["oven_scheduled_in_min"])
+        self.assertIsNotNone(r.drivers["cooking_scheduled_in_min"])
 
     def test_thermal_risk_silent_when_no_heat(self):
         snap, hist = self._snapshot("idle")
@@ -165,6 +165,28 @@ class PolicyTest(Base):
 
     def test_unknown_action_defaults_to_tier2(self):
         self.assertEqual(policy.tier_of("invented_action"), policy.TIER2)
+
+    def test_a_scheduled_meal_proposes_both_sides_of_the_line(self):
+        """Poster §II.C names "pre-cooling a room before cooking" (Tier 1) and
+        "warming up cooktops" (Tier 2). Same calendar event, opposite stakes."""
+        e = self._engine()
+        e.sensors.apply_scenario("oven")
+        snap = e.sensors.snapshot()
+        r = risk.thermal_risk(snap, e.sensors.history)
+        cands = {c.kind: c for c in policy.candidates(r, snap)}
+        self.assertEqual(cands["precool_kitchen"].tier, policy.TIER1)
+        self.assertEqual(cands["precool_kitchen"].device_id, "ac_kitchen")
+        self.assertEqual(cands["preheat_cooktop"].tier, policy.TIER2)
+        self.assertEqual(cands["preheat_cooktop"].device_id, "cooktop")
+
+    def test_precooling_stops_once_the_kitchen_ac_is_on(self):
+        e = self._engine()
+        e.sensors.apply_scenario("oven")
+        e.sensors.note_action("ac_kitchen", [{"action": "power", "value": True}])
+        snap = e.sensors.snapshot()
+        r = risk.thermal_risk(snap, e.sensors.history)
+        kinds = [c.kind for c in policy.candidates(r, snap)]
+        self.assertNotIn("precool_kitchen", kinds)
 
     def test_mold_candidates_include_the_purifier(self):
         e = self._engine()
@@ -227,7 +249,7 @@ class CalendarInputTest(Base):
                                "end": ""}]
         r = risk.thermal_risk(e.sensors.snapshot(), e.sensors.history, now)
         self.assertIsNotNone(r)          # load that has not arrived yet
-        self.assertIsNotNone(r.drivers["oven_scheduled_in_min"])
+        self.assertIsNotNone(r.drivers["cooking_scheduled_in_min"])
 
 
 # ---------------------------------------------------------------- approvals
@@ -427,7 +449,17 @@ class ProactiveLLMTest(Base):
             self.assertIn("ventilate", applied.get("washer", []))
             self.assertIn("power", applied.get("dehumidifier", []))
 
-    def test_llm_choosing_only_tier1_skips_the_question(self):
+    def test_llm_dropping_the_tier2_candidate_still_asks(self):
+        """The model may decline to *do* a Tier-2 action; it may not decline to
+        *ask*.
+
+        Measured, not assumed: given a candidate that switches on a heating
+        appliance, glm-4-flash left it off the list in 15 runs out of 15, across
+        four framings (cooktop, oven, "the resident is standing there", cooking
+        five or nineteen minutes away). If that judgement decided the question,
+        a cooking session on the calendar would be silently ignored — so the
+        rules decide what is put to the user, and the user decides what runs.
+        """
         with FakeLLM() as fake:
             fake.prose_reply = '{"chosen": ["ventilate_kitchen"]}'
             e = self._engine_llm(fake)
@@ -435,8 +467,29 @@ class ProactiveLLMTest(Base):
             e.tick()
             applied = {dev for dev, _ in self.adapter.applied}
             self.assertIn("range_hood", applied)
-            self.assertNotIn("dryer", applied)
-            self.assertEqual(e.approvals.pending(), [])  # delay was never chosen
+            self.assertNotIn("dryer", applied)     # a Tier-2 action never runs by itself
+            self.assertNotIn("cooktop", applied)
+            pending = e.approvals.pending()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual({a["kind"] for a in pending[0].actions},
+                             {"delay_dryer", "preheat_cooktop"})
+
+    def test_declining_a_question_stops_the_house_asking_again(self):
+        """Because the Tier-2 question is no longer the model's to drop, it
+        would otherwise come back every cooldown for as long as the condition
+        lasts. No is an answer; the quiet window is how the house remembers."""
+        with FakeLLM() as fake:
+            fake.prose_reply = '{"chosen": ["ventilate_kitchen"]}'
+            e = self._engine_llm(fake)
+            e.sensors.apply_scenario("oven")
+            e.tick()
+            pending = e.approvals.pending()
+            self.assertEqual(len(pending), 1)
+            e.decline(pending[0].id)
+            remaining = e._cooldown["thermal"] - time.monotonic()
+            self.assertGreater(remaining, e.cooldown_seconds)
+            e.tick()
+            self.assertEqual(e.approvals.pending(), [])
 
 
 if __name__ == "__main__":

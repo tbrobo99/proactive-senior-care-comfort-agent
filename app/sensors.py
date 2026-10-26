@@ -13,12 +13,13 @@ a sensor fact; the range hood exhausting it is an adapter action. Keeping the
 two apart is what lets the proactive loop close a real loop: act, watch the room
 answer, act again.
 
-The kitchen has no air conditioner — Korean apartments put them in the living
-room and bedrooms. Its thermal state is read the way a real deployment would
-read it: through the fridge. LG smart fridges report an external (room)
-temperature and expose the compressor's energy draw through ThinQ, and a
-compressor working harder is a kitchen getting hotter. The range hood is what
-the loop can actually do about it.
+The kitchen's thermal state is read through the fridge, not through its air
+conditioner: an AC reports the setpoint it was told, not the room it stands in.
+LG smart fridges report an external (room) temperature and expose the
+compressor's energy draw through ThinQ, and a compressor working harder is a
+kitchen getting hotter. So the fridge is the sensor and the kitchen AC is one of
+the actuators — which is the arrangement the poster describes, where the air
+conditioner gets a signal ahead of the cooking instead of after it.
 
 Physics here is simple and explainable on purpose. Every number the risk model
 consumes can be traced back to a rule in `_tick` — the point of Phase 2 is the
@@ -54,7 +55,8 @@ ROOMS = ("Living Room", "Kitchen", "Bedroom", "Balcony")
 
 # Nameplate draw of the heat-generating appliances, watts. The thermal risk
 # index is a load ratio, so these numbers are the units it is measured in.
-HEAT_LOAD_W = {"oven": 2200, "dryer": 1800, "dish_washer": 1200, "washer": 500}
+HEAT_LOAD_W = {"oven": 2200, "dryer": 1800, "dish_washer": 1200, "washer": 500,
+               "cooktop": 1800}
 
 ROOM_BASE = {
     "Living Room": {"temp": 29.0, "humidity": 52.0},
@@ -98,6 +100,11 @@ class SensorSimulator:
             # is a sensor fact like any other: the mold branch proposes it when
             # spores are the problem, and the loop must not propose it twice.
             "purifier": {"power": False, "fan": "auto"},
+            # The cooktop is the one heating appliance the house can reach but
+            # must not decide about alone: a hob left on with nobody in front of
+            # it is the reason Tier 2 exists (poster §II.C, "warming up
+            # cooktops"). Its state is a sensor fact like any other.
+            "cooktop": {"power": False},
             # The fridge is the kitchen's sensor node: what its external probe
             # reads and how hard its compressor works. duty_cycle is derived
             # from external_temp, exactly as the real appliance's draw tracks
@@ -153,6 +160,13 @@ class SensorSimulator:
         # a demo, slow enough that ventilation has a point.
         if ap["oven"]["power"]:
             rooms["Kitchen"]["temp"] = _clamp(rooms["Kitchen"]["temp"] + 0.05 * dt, 16, 42)
+
+        # Cooktop: a smaller element than the oven, and it only heats while
+        # something is on it. It is in the load table, so switching it on raises
+        # the thermal index by itself — which is exactly why the policy asks
+        # before it does.
+        if ap.get("cooktop", {}).get("power"):
+            rooms["Kitchen"]["temp"] = _clamp(rooms["Kitchen"]["temp"] + 0.03 * dt, 16, 42)
 
         # Range hood: the only kitchen actuator there is. It exhausts hot air,
         # so the kitchen sheds heat toward the outdoor baseline instead of
@@ -238,7 +252,8 @@ class SensorSimulator:
                 name, value = act.get("action"), act.get("value")
                 if device_id.startswith("ac_"):
                     room = next((d_room for d_id, d_room in
-                                 (("ac_living", "Living Room"), ("ac_bedroom", "Bedroom"))
+                                 (("ac_living", "Living Room"), ("ac_bedroom", "Bedroom"),
+                                  ("ac_kitchen", "Kitchen"))
                                  if d_id == device_id), None)
                     if room:
                         ac = self.ac_targets.setdefault(room, {"power": False, "mode": "cool",
@@ -317,6 +332,7 @@ class SensorSimulator:
                 "dehumidifier": {"power": False},
                 "range_hood": {"power": False, "fan": "auto"},
                 "purifier": {"power": False, "fan": "auto"},
+                "cooktop": {"power": False},
                 "fridge": {"power": True, "external_temp": 29.0, "duty_cycle": 0.35},
             }
             self.ac_targets.clear()
