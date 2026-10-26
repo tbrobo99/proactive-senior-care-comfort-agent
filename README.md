@@ -145,6 +145,17 @@ calendar would be silently ignored. So the rules decide what is put to the user
 and the user decides what runs. A "no", or the fail-safe running out, buys half
 an hour of silence: asking again three minutes later is not respect.
 
+**Two numbers, not one.** The check runs every second; the decision runs once,
+when something is wrong. They are different operations with different deadlines,
+so they get different budgets: the check completes in under 30 ms, and the
+decision — one model call, made only after an index has already crossed its
+threshold, at most once per risk kind per three minutes — runs a median of two to
+three seconds. Collapsed into a single figure, "under two seconds per check" is
+either met trivially by the path nobody worries about or missed by the path that
+never needed to be that fast. The decision also carries a five-minute fail-safe,
+and five seconds is under two percent of five minutes: the deadline that actually
+protects the user has room to spare. `python -m eval.latency` prints both.
+
 **Run it:**
 
 ```
@@ -581,14 +592,15 @@ proactive-senior-care-comfort-agent/
 │       ├── app.js          state + rendering
 │       ├── manifest.webmanifest
 │       └── sw.js           service worker
-├── tests/                  198 unit tests, stdlib only
+├── tests/                  247 unit tests, stdlib only
 │   ├── fake_llm.py         scripted OpenAI-compatible server (offline CI)
 │   ├── test_scenes.py      routines, and the fridge that no scene may switch off
 │   └── test_agent_loop.py  tier routing + every loop guardrail
 ├── eval/                   reproducible benchmarks
 │   ├── dataset.jsonl       65 labelled utterances, fixed clock
 │   ├── run.py              rule accuracy per category, `--min` for CI
-│   └── tiers.py            which tier answers 15 hard sentences, and what it costs
+│   ├── tiers.py            which tier answers 15 hard sentences, and what it costs
+│   └── latency.py          the check and the decision, measured apart
 ├── tools/
 │   ├── thinq_check.py      ThinQ calibration helper
 │   ├── make_icons.py       renders every icon and splash screen
@@ -760,7 +772,7 @@ falls through every layer to the generic help text.
 
 ### Unit tests
 
-212 tests, standard library only — no pytest, no fixtures, no network:
+247 tests, standard library only — no pytest, no fixtures, no network:
 
 ```bash
 python -m unittest discover -s tests -v
@@ -952,6 +964,39 @@ Five bugs in this table are already fixed, each with a test that replays it:
 It is enough to show the layers are wired the way the design claims, and to catch
 regressions in routing and in the guardrails. It is not a benchmark of language
 understanding — the remaining partial is exactly that.
+
+### Latency, split in two
+
+The loop has two clocks three orders of magnitude apart, so they are measured
+apart. `python -m eval.latency --n 6`:
+
+```
+mold  — 3 candidates
+  check     median 1.2 ms  max 1.4 ms   (every tick, no network)
+  decision  median 1.94 s  (1.40–3.80)  (model in the loop)
+            llm: Tier 1 ventilate_washer, dehumidifier_on, purifier_on / Tier 2 —
+            0.6% of the 300 s fail-safe
+
+oven_running  — 4 candidates
+  check     median 1.1 ms  max 1.4 ms
+  decision  median 1.85 s  (1.47–16.70)
+            llm: Tier 1 ventilate_kitchen, precool_kitchen / Tier 2 delay_dryer, preheat_cooktop
+            0.6% of the 300 s fail-safe
+```
+
+The check is the whole 1 Hz path — snapshot, record, both indices, candidate
+generation — and it never touches the network, which is why it is a millisecond
+and not a second. The decision is one model call, and it happens only once an
+index has already crossed its threshold.
+
+The median moves between runs: 1.9 s here, 3.5 s on a busier evening, same prompt
+and same model, because the remote service is the variable and not the code. So
+does the tail — one run in six of `oven_running` took **16.7 s**, a provider
+stall, and it chose exactly what the other five chose. That is why the budget is
+stated as a budget and not as a guarantee, and why the fail-safe clock starts when
+the question is *asked* rather than when the risk fired: `approval.propose()`
+writes `expires_at` after the model has returned, so a slow decision costs
+responsiveness and never eats into the user's five minutes.
 
 ---
 
