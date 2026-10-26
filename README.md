@@ -690,7 +690,9 @@ stalls — the worst case is the rules answering alone.
 3. **Control payloads need calibration** against your model's profile (section 5).
 4. **Single user, no auth.** It is a local assistant, not a multi-tenant service.
    `--lan` exposes it to the whole network with no password.
-5. **No voice input yet.** Text in, text out.
+5. **Voice input is browser-dependent.** The mic uses Web Speech, which Chrome, Edge
+   and Safari ship and Firefox does not; iOS also needs a tap before it will speak.
+   Typing always works, and that is the path the layout is built around.
 6. **No sensors.** Temperature and humidity come from the simulator; the app shell shows
    them, but nothing reads a real sensor yet.
 7. **The tool loop is slow.** 6–12 s per sentence against `glm-4-flash`, on the three

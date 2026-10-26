@@ -88,10 +88,17 @@ function repeatShort(label) {
    Korean is one tap away because the household is not. */
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const VOICE_LANGS = ["en-US", "ko-KR"];
+const VOICE_PAUSE_MS = 2000;   // a pause this long means "I have finished"
+const VOICE_MAX_RESTARTS = 8;
 let voiceLang = VOICE_LANGS[0];
 let recognition = null;
 let listening = false;
 let ttsOn = false;
+let voiceTimer = null;         // the pause that ends the turn
+let voiceRestarts = 0;
+let voiceBase = "";            // words finalised before the current session
+let voiceSaid = "";            // finalised words so far in this turn
+let voiceDone = false;         // this turn has already been handed to send()
 
 function speak(text, force) {
   if (!(ttsOn || force) || !("speechSynthesis" in window)) return;
@@ -107,9 +114,49 @@ function speak(text, force) {
 function setListening(on) {
   listening = on;
   const btn = $("#mic");
-  if (!btn) return;
-  btn.classList.toggle("listening", on);
-  btn.setAttribute("aria-pressed", String(on));
+  if (btn) {
+    btn.classList.toggle("listening", on);
+    btn.setAttribute("aria-pressed", String(on));
+  }
+  // Say out loud that the turn is still open. Without this the only signal that
+  // the microphone is done is the words appearing in the box, and a pause of a
+  // second and a half looks identical to having been cut off.
+  const input = $("#input");
+  if (input) {
+    if (on) input.dataset.ph = input.dataset.ph || input.placeholder;
+    input.placeholder = on ? "Listening — pause when you're done" : (input.dataset.ph || "Or type here…");
+  }
+}
+
+/* The engine hands back each phrase without the space that belonged between
+   them: "turn on the living" and "room AC" are two phrases, and gluing them
+   with + makes one word out of two. */
+function glue(a, b) {
+  if (!a) return b || "";
+  if (!b) return a;
+  if (/[\s-]$/.test(a) || /^[\s,.;:!?]/.test(b)) return a + b;
+  return `${a} ${b}`;
+}
+
+/* End the turn: take whatever is in the box and send it. Guarded by voiceDone so
+   the three ways a turn can end — the pause timer, a second tap, the engine
+   giving up — cannot send the same sentence twice. */
+function voiceFinish() {
+  if (voiceDone) return;
+  voiceDone = true;
+  clearTimeout(voiceTimer);
+  voiceTimer = null;
+  const text = ($("#input").value || voiceSaid).replace(/\s+/g, " ").trim();
+  setListening(false);
+  try { if (recognition) recognition.stop(); } catch (_) { /* already stopped */ }
+  if (text) send(text);
+}
+
+/* The pause, not the engine, decides when the sentence is over. Every result
+   pushes it back, so a breath in the middle of a sentence costs nothing. */
+function voiceArmPause() {
+  clearTimeout(voiceTimer);
+  voiceTimer = setTimeout(voiceFinish, VOICE_PAUSE_MS);
 }
 
 function startVoice() {
@@ -117,33 +164,68 @@ function startVoice() {
     toast("Voice needs Chrome or Safari — please type.");
     return;
   }
-  if (listening) {
-    if (recognition) recognition.stop();
-    setListening(false);
-    return;
-  }
+  if (listening) { voiceFinish(); return; }   // a second tap means "send now"
   if (!recognition) {
     recognition = new SpeechRecognition();
     recognition.interimResults = true;
-    recognition.continuous = false;
+    // continuous, because the default ends the session at the first short
+    // pause: "turn on the living room AC … and set it to 24" arrived as two
+    // half sentences, and the first half was already on its way to the model
+    // before the second half was spoken.
+    recognition.continuous = true;
     recognition.onresult = (event) => {
-      let heard = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        heard += event.results[i][0].transcript;
+      // Recompute from index 0 rather than from resultIndex: with continuous
+      // on, the results list is the whole turn, and rebuilding it is idempotent
+      // where appending to it is not.
+      let finalText = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) finalText = glue(finalText, result[0].transcript);
+        else interim = glue(interim, result[0].transcript);
       }
+      voiceSaid = glue(voiceBase, finalText).trim();
       // Live in the box: the user sees what was heard before it is sent, which
       // is the difference between trusting a microphone and guessing at one.
-      $("#input").value = heard;
-      const last = event.results[event.results.length - 1];
-      if (last.isFinal) send(heard);
+      $("#input").value = glue(voiceSaid, interim).trim();
+      voiceArmPause();
     };
     recognition.onerror = (event) => {
-      if (event.error === "not-allowed") toast("Microphone permission denied — please type.");
-      setListening(false);
+      if (voiceDone) return;
+      if (event.error === "not-allowed") {
+        toast("Microphone permission denied — please type.");
+        voiceDone = true;      // stop onend from restarting a denied mic
+      } else if (event.error === "no-speech") {
+        return;                // onend decides; nothing was said yet
+      } else if (event.error !== "aborted") {
+        toast("Voice stopped — please type.");
+      }
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      if (voiceDone) { setListening(false); return; }
+      // Safari ends the session at every pause even with continuous = true.
+      // Start it again and keep what has been heard, so the pause timer — not
+      // the engine — is what ends the turn. Delayed slightly to avoid spinning.
+      if (listening && voiceRestarts < VOICE_MAX_RESTARTS) {
+        voiceRestarts++;
+        setTimeout(() => {
+          if (voiceDone || !listening) return;
+          // A new session starts with an empty results list, so bank what the
+          // last one heard before asking for more.
+          voiceBase = voiceSaid;
+          try { recognition.start(); } catch (_) { voiceFinish(); }
+        }, 250);
+        return;
+      }
+      voiceFinish();
+    };
   }
   recognition.lang = voiceLang;
+  voiceBase = "";
+  voiceSaid = "";
+  voiceDone = false;
+  voiceRestarts = 0;
+  clearTimeout(voiceTimer);
   $("#input").value = "";
   try {
     recognition.start();

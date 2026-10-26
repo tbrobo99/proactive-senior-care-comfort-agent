@@ -163,7 +163,8 @@ Show `config.json` with `device_backend: thinq` and `dry_run: true`, plus
 `python tools/thinq_check.py devices`.
 
 *"Same pipeline, one config line. Dry-run is on by default so a payload mismatch can never
-send a wrong command to an appliance. No voice input yet, and the ThinQ control payload has
+send a wrong command to an appliance. Voice input needs a browser with Web Speech —
+Chrome, Edge or Safari, not Firefox — and the ThinQ control payload has
 to be calibrated per model — everything else in this demo runs from a clean clone with no
 dependencies."*
 
