@@ -604,10 +604,11 @@ function tagFor(msg) {
   }
   // A reply written by a build that no longer runs is a historical answer;
   // marking it is the difference between reading a transcript and trusting it.
+  // Only a message that carries a build can be called stale: an optimistic user
+  // bubble has no payload, and stamping it "older build" a second after it was
+  // typed is a false alarm — the one thing a diagnostic must never do.
   const b = (msg.payload || {}).build;
-  if (liveBuild() && (!b || b !== liveBuild())) {
-    rows.push(b ? `old build ${b}` : "older build");
-  }
+  if (b && liveBuild() && b !== liveBuild()) rows.push(`old build ${b}`);
   return rows.length ? rows.join(" · ") : null;
 }
 

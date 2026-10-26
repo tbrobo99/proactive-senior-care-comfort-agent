@@ -630,10 +630,21 @@ button:active { opacity: .92; }
 
 .chips {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 7px;
   padding: 4px 0 10px;
+  /* One row, scrolled rather than wrapped: a second row of chips steals height
+     from the conversation, and a chip clipped mid-word reads as a bug. The fade
+     is the only affordance it needs — if the row fits, the fade falls on empty
+     background and disappears. */
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
 }
+.chips::-webkit-scrollbar { display: none; }
+.chips button { flex: 0 0 auto; }
 .chips button {
   border: 1.5px solid var(--line-strong);
   background: #fff;
