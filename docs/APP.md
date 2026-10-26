@@ -64,6 +64,31 @@ The quick actions are real commands, not shortcuts: they post a sentence to
 `turn on the living room AC and set it to 24 degrees`, and the room tab changes
 which room the sentence names.
 
+## The microphone hears nothing
+
+If Talk captures silence — the button pulses, nothing appears in the box, and
+"the microphone is listening but nobody is speaking" is what the browser
+reports — the app is not the problem. Windows keeps a *headset-jack* microphone
+selected by default on most laptops, and that input exists and hears nothing
+unless something is plugged into the jack. Plugging in headphones fixes it by
+making that jack live, which is why the symptom looks like "it only works with
+headphones".
+
+Fix it once, in this order:
+
+1. **Settings → System → Sound → Input.** Pick the microphone that is the
+   machine's own (the one whose level bar moves when you talk, with nothing
+   plugged in). Windows calls the two "Microphone (Realtek Audio)" and
+   "External Microphone (Realtek Audio)".
+2. **chrome://settings/content/microphone** — Chrome has its own device choice,
+   separate from Windows'. Set it to the same one, and make sure
+   `http://127.0.0.1:8848` is allowed.
+3. If Bluetooth headphones are connected, Windows switches the default input to
+   the headset the moment they connect. Disconnect them, or repeat step 1.
+
+The app says "I heard nothing — check which microphone Windows is using" when a
+turn captures no speech at all, because the failure is silent otherwise.
+
 ## Install it on a phone
 
 The page is a valid PWA, so it installs to the home screen with no store, no APK

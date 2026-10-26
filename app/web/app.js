@@ -99,6 +99,7 @@ let voiceTimer = null;         // the pause that ends the turn
 let voiceRestarts = 0;
 let voiceBase = "";            // words finalised before the current session
 let voiceSaid = "";            // finalised words so far in this turn
+let voiceWarned = false;       // the "I heard nothing" hint, once per turn
 let voiceDone = false;         // this turn has already been handed to send()
 
 function speak(text, force) {
@@ -197,6 +198,16 @@ function startVoice() {
         toast("Microphone permission denied — please type.");
         voiceDone = true;      // stop onend from restarting a denied mic
       } else if (event.error === "no-speech") {
+        // Silence, not a pause: nothing at all was captured this turn. On a
+        // laptop this is almost always the wrong input device — Windows keeps
+        // the headset-jack microphone selected, which is a microphone that
+        // exists and hears nothing unless something is plugged into it. Saying
+        // so is the difference between "the app is broken" and "pick the other
+        // microphone".
+        if (!voiceWarned && !voiceSaid && !$("#input").value.trim()) {
+          voiceWarned = true;
+          toast("I heard nothing — check which microphone Windows is using.");
+        }
         return;                // onend decides; nothing was said yet
       } else if (event.error !== "aborted") {
         toast("Voice stopped — please type.");
@@ -224,6 +235,7 @@ function startVoice() {
   recognition.lang = voiceLang;
   voiceBase = "";
   voiceSaid = "";
+  voiceWarned = false;
   voiceDone = false;
   voiceRestarts = 0;
   clearTimeout(voiceTimer);
