@@ -90,6 +90,7 @@ function repeatShort(label) {
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const VOICE_LANGS = ["en-US", "ko-KR"];
 const VOICE_PAUSE_MS = 2000;   // a pause this long means "I have finished"
+const VOICE_TAIL_QUIET_MS = 900;   // a "final" this long after any audio is a guess
 const VOICE_MAX_RESTARTS = 8;
 let voiceLang = VOICE_LANGS[0];
 let recognition = null;
@@ -101,6 +102,9 @@ let voiceBase = "";            // words finalised before the current session
 let voiceSaid = "";            // finalised words so far in this turn
 let voiceWarned = false;       // the "I heard nothing" hint, once per turn
 let voiceDone = false;         // this turn has already been handed to send()
+let voiceFinals = 0;           // finalised phrases the engine has handed back
+let voiceInterim = "";         // the last thing the engine was still guessing at
+let voiceLastHeard = 0;        // when any text last arrived from the engine
 
 function speak(text, force) {
   if (!(ttsOn || force) || !("speechSynthesis" in window)) return;
@@ -179,13 +183,41 @@ function startVoice() {
       // Recompute from index 0 rather than from resultIndex: with continuous
       // on, the results list is the whole turn, and rebuilding it is idempotent
       // where appending to it is not.
+      const now = Date.now();
       let finalText = "";
       let interim = "";
+      let finals = 0;
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
-        if (result.isFinal) finalText = glue(finalText, result[0].transcript);
-        else interim = glue(interim, result[0].transcript);
+        if (result.isFinal) {
+          finals++;
+          finalText = glue(finalText, result[0].transcript);
+        } else if (String(result[0].transcript || "").trim()) {
+          interim = glue(interim, result[0].transcript);
+        }
       }
+      if (interim) voiceInterim = interim;
+
+      if (finals > voiceFinals) {
+        // Speech is announced before it is confirmed: while a person is
+        // talking, the engine keeps handing back interim text, and the final
+        // phrase lands as the confirmation of something it was already
+        // guessing at. A phrase that arrives with nothing interim behind it,
+        // more than a second after the last audio, was not spoken — the engine
+        // filled a silence. "turn on living room" came back as "turn on living
+        // room they say": the tail was invented, and because every result
+        // pushed the pause timer back, a slow speaker's turn never ended on
+        // their own schedule.
+        const invented = voiceSaid && !voiceInterim &&
+                         now - voiceLastHeard > VOICE_TAIL_QUIET_MS;
+        if (invented) return;        // drop it; the pause timer keeps running
+        voiceFinals = finals;
+        voiceInterim = "";
+      } else if (!interim) {
+        return;                      // nothing new: do not extend the turn
+      }
+
+      voiceLastHeard = now;
       voiceSaid = glue(voiceBase, finalText).trim();
       // Live in the box: the user sees what was heard before it is sent, which
       // is the difference between trusting a microphone and guessing at one.
@@ -225,6 +257,8 @@ function startVoice() {
           // A new session starts with an empty results list, so bank what the
           // last one heard before asking for more.
           voiceBase = voiceSaid;
+          voiceFinals = 0;
+          voiceInterim = "";
           try { recognition.start(); } catch (_) { voiceFinish(); }
         }, 250);
         return;
@@ -238,6 +272,9 @@ function startVoice() {
   voiceWarned = false;
   voiceDone = false;
   voiceRestarts = 0;
+  voiceFinals = 0;
+  voiceInterim = "";
+  voiceLastHeard = Date.now();
   clearTimeout(voiceTimer);
   $("#input").value = "";
   try {

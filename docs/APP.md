@@ -89,6 +89,28 @@ Fix it once, in this order:
 The app says "I heard nothing — check which microphone Windows is using" when a
 turn captures no speech at all, because the failure is silent otherwise.
 
+## The microphone hears words nobody said
+
+A different failure, with a different cause: the transcript comes back longer
+than the sentence. *"Turn on living room"* arrived as *"turn on living room they
+say"*, and the extra words were invented during the pause at the end.
+
+The engine finalises a phrase on its own schedule and keeps the session open
+afterwards, so it has silence to work with. Anything it emits during that silence
+lands as a final result, and every result used to push the pause timer back —
+which meant a slow speaker's turn never ended on their own schedule and the
+invented tail went out with the sentence.
+
+The client now drops a final phrase that arrives more than 900 ms after any audio
+with no interim text behind it: real speech is announced while it is being spoken,
+a guess is not. Nothing else changes — a pause in the middle of a sentence, a
+second clause after a breath, and a slow speaker who leaves gaps between words all
+still work, because each of those produces interim text as it is spoken.
+
+What cannot be fixed from here is the acoustic model itself. Dialects, elderly
+speech and a strong accent are exactly where it is weakest, which is why the text
+box is permanent and the microphone is an addition to it.
+
 ## Install it on a phone
 
 The page is a valid PWA, so it installs to the home screen with no store, no APK

@@ -686,9 +686,16 @@ stalls — the worst case is the rules answering alone.
 3. **Control payloads need calibration** against your model's profile (section 5).
 4. **Single user, no auth.** It is a local assistant, not a multi-tenant service.
    `--lan` exposes it to the whole network with no password.
-5. **Voice input is browser-dependent.** The mic uses Web Speech, which Chrome, Edge
-   and Safari ship and Firefox does not; iOS also needs a tap before it will speak.
-   Typing always works, and that is the path the layout is built around.
+5. **Voice input is browser-dependent, and speech is the weakest link in accuracy.**
+   The mic uses Web Speech, which Chrome, Edge and Safari ship and Firefox does not;
+   iOS also needs a tap before it will speak. The engine finalises phrases on its own
+   schedule and fills silences with words nobody said — *"turn on living room"* came
+   back as *"turn on living room they say"*, and because every result pushed the pause
+   timer back, a slow speaker's turn never ended on their own schedule. The client now
+   drops a phrase that arrives more than 900 ms after any audio with nothing interim
+   behind it, which removes the invented tail; it cannot fix the acoustic model, and
+   dialects and elderly speech are where that model is weakest. Typing always works,
+   and that is the path the layout is built around.
 6. **No sensors.** Temperature and humidity come from the simulator; the app shell shows
    them, but nothing reads a real sensor yet.
 7. **The tool loop is slow.** 6–12 s per sentence against `glm-4-flash`, on the three
