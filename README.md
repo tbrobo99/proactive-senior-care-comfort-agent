@@ -522,7 +522,7 @@ address: a service worker needs a secure context, so *Add to Home Screen* only
 produces a real install behind HTTPS. See [docs/APP.md](docs/APP.md).
 
 `config.json` is created on first run. To see the available options up front, copy
-`config.example.json` and edit it — the file is git-ignored because it holds your PAT.
+`config.example.json` and edit it — the file is git-ignored because it holds your API keys.
 
 ---
 
@@ -604,60 +604,23 @@ proactive-senior-care-comfort-agent/
 
 ---
 
-## 5. Connecting real LG appliances
+## 5. Real LG appliances (optional)
 
 **None of this is needed to run the project.** `device_backend` defaults to
 `mock`: the simulator owns the devices, and there is no LG account, no token and
-no hardware involved. Everything in sections 1–4, every test, and the course
-demo run that way. This section is here because the system claims to be an
-orchestration layer over the LG ecosystem, and a claim like that should be
-checkable rather than asserted — so the adapter exists and the path is written
-down. If you do not have LG appliances, skip to section 6.
+no hardware involved. Every test, the eval suite and the course demo run that
+way. If you have no appliances, skip to section 6.
 
-### Step 1 — get a PAT
-
-1. Sign in at <https://smartsolution.developer.lge.com>
-2. Go to **Cloud Developer → Docs → ThinQ Connect**
-3. Generate a **Personal Access Token**
-
-> Use a standalone LG account. If your appliances were bound while signed in with a
-> third-party identity (Google, Apple, …), third-party clients usually cannot read them.
-
-### Step 2 — configure
-
-```json
-{
-  "device_backend": "thinq",
-  "thinq": {
-    "access_token": "YOUR_PAT",
-    "country_code": "US",
-    "client_id": "",
-    "dry_run": true
-  }
-}
-```
-
-`country_code` must match the region your LG account was created in. `client_id` is
-generated and written back automatically if left empty.
-
-### Step 3 — install and calibrate
-
-```bash
-pip install thinqconnect
-python tools/thinq_check.py ping                  # verify authentication
-python tools/thinq_check.py devices               # list appliances
-python tools/thinq_check.py profile <device_id>   # dump that model's profile
-```
-
-The profile output determines the field names in
-`app/devices/thinq.py → _build_control_payload()`. The official API structures control
-payloads differently per device type, so this layer must be aligned with your actual
-model before anything is sent to hardware.
-
-### Step 4 — dry run, then go live
-
-`thinq.dry_run` defaults to `true`: commands are assembled and logged but not
-transmitted, and replies say so. Set it to `false` once the payload matches.
+A ThinQ Connect adapter does exist — `app/devices/thinq.py`, plus
+`tools/thinq_check.py` to ping the API, list appliances and dump a model's
+profile. It is there because a system that claims to orchestrate the LG ecosystem
+should be checkable rather than asserted. It is also **uncalibrated**: the
+official API structures control payloads differently per device type, so the
+field names in `_build_control_payload()` must be matched to your model before
+anything reaches hardware. That is why `thinq.dry_run` defaults to `true` —
+commands are assembled and logged, replies say so, nothing is transmitted. To try
+it, set `device_backend: "thinq"` in `config.json` and fill in
+`thinq.access_token` and `country_code`.
 
 ---
 
@@ -692,7 +655,7 @@ stalls — the worst case is the rules answering alone.
 
 - Binds to `127.0.0.1` only. For remote access use Tailscale or a Cloudflare Tunnel — do
   not expose the port directly.
-- The PAT lives in `config.json` on disk; it never reaches the browser or the LLM.
+- Tokens live in `config.json` on disk; they never reach the browser or the LLM.
 - Every command is written to an audit log (`logs` table).
 - Scheduled runs check that the device is online first, and record
   `Failed: device offline` instead of failing silently.
