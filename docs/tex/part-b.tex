@@ -1,0 +1,741 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{url}
+\usepackage{xcolor}
+
+% IEEEtran asks for Times (ptm), Helvetica (phv) and Courier (pcr). Under
+% XeTeX every font is TU-encoded, and TUptm.fd does not exist, so each request
+% falls back to Latin Modern -- including its bold shape, which is silently
+% dropped. The result is a whole PDF with no bold anywhere: headings, table
+% headers and every \textbf in the text print as regular weight. Setting the
+% families explicitly is what brings bold, small caps and a real monospace
+% back. Do not remove these three lines without checking the font census.
+\renewcommand{\rmdefault}{lmr}
+\renewcommand{\sfdefault}{lmss}
+\renewcommand{\ttdefault}{lmtt}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  breakindent=1.6em,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framesep=3pt,
+  rulecolor=\color{black!30},
+  xleftmargin=4pt,
+  xrightmargin=2pt,
+  aboveskip=6pt,
+  belowskip=6pt,
+  showstringspaces=false,
+}
+
+\graphicspath{{figures/}}
+
+% Sixteen tables and eight full-width figures in thirteen pages means constant
+% float pressure. These limits let a page hold more float material and less
+% text. The document still ends up with three or four pages that are mostly
+% exhibits, which is normal for a specification this dense; do not fight it.
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.7}
+\renewcommand{\floatpagefraction}{0.7}
+\setcounter{topnumber}{4}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{6}
+
+\begin{document}
+
+\title{FSD-Home: Specification Document (Deliverable B)\\ \large Structured System Analysis of a Risk-Graded Autonomous Home Orchestrator}
+\author{
+\IEEEauthorblockN{Ha Yun Kim, SooYoung Song, Ruitan Sun, Tang Bin}
+\IEEEauthorblockA{Department of Information Systems\\
+Hanyang University, Seoul, Korea\\
+hykim1215@hanyang.ac.kr, sys1109@hanyang.ac.kr,
+sunruitan2024@126.com, tbrobo99@outlook.com}
+}
+\maketitle
+\begin{center}\small CSE 406 Software Engineering --- Term Project I, Phase 2\end{center}
+\begin{center}\small Hanyang University, Department of Information Systems\end{center}
+\begin{center}\small Draft v0.1 --- 2 November 2026 $\cdot$ Prepared by Tang Bin, for review by Ha Yun Kim\end{center}
+\begin{abstract}
+
+\textbf{FSD-Home runs a house the way a car drives itself: it acts on its own when the action can be taken back, and it asks first when it cannot.} Deliverable A stated what FSD-Home must do; this document states how the system is structured to do it. We model the system four times, in four notations, and then require the four models to agree with one another. A \textbf{data-flow model} (a context diagram, a level-1 DFD, and a complete data dictionary) fixes the functional decomposition and the data that crosses each boundary. A \textbf{behavioural model} (a state machine for the autonomy cycle and a sequence diagram for a Level 2 request) fixes when each process is allowed to run. A \textbf{data model} fixes what is stored and which foreign keys are mandatory. A \textbf{use-case model} fixes what a household member can see and do. A traceability matrix then ties every functional requirement from Deliverable A to the process, data store, use case and acceptance test that realises it.
+
+Two structural commitments carry the design. First, the language model sits \textbf{outside the actuator path}: no model output can reach a device without passing a deterministic gate, so a hallucinated or injected instruction has no route to hardware. Second, autonomy is graded by \textbf{whether an action can be undone}, not by how the action feels: the class of an action is derived from one checkable property instead of a judgement call. Section IX states this as a formal rule, and it is the part of the design we would defend first.
+
+\begin{table*}[tbp]
+\centering
+{\footnotesize\itshape Table A. How this document answers the sections the course outline asks for under Deliverable B.\par}
+\vspace{2pt}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.3827\textwidth-4.885pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.5573\textwidth-7.115pt\relax}@{}}
+\hline
+\textbf{Course outline, Deliverable B} & \textbf{Where it is answered} \\
+\hline
+III. Development environment, platform, cost & Section X \\
+IV. Specifications, requirement by requirement & Sections III--VIII (structured analysis) and Section XI (pseudocode) \\
+Version control for code and documents & Section X-F; repository URL is in the course spreadsheet \\
+\hline
+\end{tabular}
+\end{table*}
+
+\end{abstract}
+
+\section{Scope and Modelling Approach}
+
+\subsection{What this document adds to Deliverable A}
+
+Deliverable A is a requirements document. It says which risks are tracked, which actions exist, and which of them need approval. It does not say how the parts are arranged, what each part reads and writes, or in what order they may run. Those are the questions a specification answers, and they are the questions that decide whether the implementation can be built by four people in the remaining weeks without the parts contradicting each other.
+
+Concretely, this document fixes four things that A left open: the \textbf{process boundaries} (Section III), the \textbf{exact shape of every message} that crosses a boundary (Section IV), the \textbf{legal order of events} (Section V), and the \textbf{persistent data} (Section VI). Each is stated once, in one place, so that a disagreement later has a single document to appeal to.
+
+\subsection{Four models, one system}
+
+\begin{table*}[tbp]
+\centering
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1105\textwidth-4.230pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3249\textwidth-12.442pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4187\textwidth-16.037pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0859\textwidth-3.290pt\relax}@{}}
+\hline
+\textbf{Model} & \textbf{Notation} & \textbf{Question it answers} & \textbf{Section} \\
+\hline
+Data flow & Context diagram, level-1 DFD, data dictionary & What transforms what, and what data crosses each boundary & II--IV \\
+Behaviour & State machine, sequence diagram & When may each process run, and what happens when one fails & V \\
+Data & Entity-relationship diagram & What is stored, and which references are mandatory & VI \\
+Use case & Use-case diagram, use-case specifications & What a person can see and do & VII \\
+\hline
+\end{tabular}
+\end{table*}
+
+The four models are not four views of the same diagram. Each one can be wrong independently, and the traceability matrix in Section VIII is the check that catches the case where one model has drifted from the others.
+
+\subsection{Conventions}
+
+\begin{itemize}
+  \item Processes are numbered \textbf{P1--P6}, data stores \textbf{D1--D4}, external entities are unnumbered. The numbering is fixed for the rest of the project; later documents refer to processes by these identifiers only.
+  \item Every arrow in the DFD must have an entry in the data dictionary (Section IV). A flow that is drawn but not defined is a defect, not a shorthand.
+  \item \textbf{Level 1} means the system acts and then reports. \textbf{Level 2} means the system asks and then waits. The words "automatic" and "manual" are avoided because they describe the user's behaviour, not the system's.
+\end{itemize}
+
+\section{System Context}
+
+Figure~\ref{fig:1} places FSD-Home in its environment. The system is a single process; everything outside the boundary is a source or a sink it cannot control. Table~\ref{tab:I} lists what crosses the boundary in each direction, and records how much each source is trusted, because the answer is not the same for all four.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig1_context.png}
+\caption{Context diagram. The orchestrator is one process; every box outside it is a source or sink the system cannot control.}
+\label{fig:1}
+\end{figure*}
+
+\begin{table*}[tbp]
+\centering
+\caption{External entities and the data that crosses the system boundary.}
+\label{tab:I}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1148\textwidth-4.395pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3607\textwidth-13.814pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2241\textwidth-8.581pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2405\textwidth-9.209pt\relax}@{}}
+\hline
+\textbf{Entity} & \textbf{Into the system} & \textbf{Out of the system} & \textbf{Trust level} \\
+\hline
+Household member & Voice or touch intent, approval, schedule edits & Spoken prompt, screen overlay, audit view & Trusted for intent; never trusted for safety \\
+Simulated IoT layer & 1 Hz telemetry: temperature, drum humidity, power draw, door state & Actuator commands, seven verbs only & Untrusted: a reading may be stale or wrong \\
+LLM service (GLM-4.6) & Prompt plus risk context & Explanation text only, never an action & Untrusted: output is display text \\
+Calendar source & Busy and free windows & Schedule query & Semi-trusted: may be incomplete \\
+\hline
+\end{tabular}
+\end{table*}
+
+The third row is the important one. The language model is drawn as an external entity rather than as an internal process because that is what it is: a remote service the system calls, whose replies are treated the way any other untrusted input is treated. Section III makes the consequence explicit by giving the model its own process that no other process depends on for control flow.
+
+\section{Functional Decomposition}
+
+Figure~\ref{fig:2} decomposes the orchestrator into six processes. The decomposition follows the data, not the org chart: each process has one input that it cannot work without and one output that something else consumes.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig2_dfd1.png}
+\caption{DFD level 1. Solid arrows are data flows. D1--D3 are read-only at run time; only P2 and P6 append to their stores.}
+\label{fig:2}
+\end{figure*}
+
+\begin{table*}[tbp]
+\centering
+\caption{The six processes, their inputs and outputs, and the requirement each one serves.}
+\label{tab:II}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.0550\textwidth-2.809pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1650\textwidth-8.427pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3301\textwidth-16.854pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2613\textwidth-13.343pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1286\textwidth-6.566pt\relax}@{}}
+\hline
+\textbf{ID} & \textbf{Process} & \textbf{Input} & \textbf{Output} & \textbf{Requirement} \\
+\hline
+P1 & Ingest telemetry & Raw 1 Hz frames & Normalised reading, written to D1 & FR-1 \\
+P2 & Score risk & Readings, last fire time from D2 & MRI and TOI, appended to D2 & FR-2 \\
+P3 & Select action candidates & Risk score, device state from D1, policy from D3 & Ranked candidate list & FR-2, FR-3 \\
+P4 & Gate and confirm & Candidate list, policy from D3 & Level 1 command, or a Level 2 request & FR-3, FR-5 \\
+P5 & Explain and notify & Chosen action, risk drivers & Plain-language text, model or template & FR-4 \\
+P6 & Log and audit & Every decision, including refusals & Audit rows appended to D4 & FR-3, NFR-3 \\
+\hline
+\end{tabular}
+\end{table*}
+
+Two decisions in this table are worth defending.
+
+\textbf{Why P5 is separate from P4.} If the explanation were produced inside the gate, a slow or failing model would block the gate. Splitting them means the gate can issue a Level 1 command and a Level 2 request while the model is unreachable, and the explanation arrives late or not at all without changing what the house does. Figure~\ref{fig:4} in Section V shows this on a timeline. The split is the structural reason the system degrades gracefully instead of stopping.
+
+\textbf{Why P3 and P4 are separate.} P3 answers "what could be done here", which is a question about physics and thresholds. P4 answers "may this be done now", which is a question about policy, cooldown and approval. Merging them would put a policy table inside the same function that ranks by risk, and the first bug in one would silently change the other. Keeping them apart also makes P4 the only process that can emit an actuator command, which is what makes the safety argument in Section IX checkable by reading one function.
+
+\section{Data Dictionary}
+
+A DFD arrow is a promise that two processes agree on a message. Table~\ref{tab:III} defines every flow in Figure~\ref{fig:2}, and Table~\ref{tab:IV} defines the four stores. Notation follows the usual convention: braces for a composite, \texttt{?} for optional, \texttt{*} for repetition, and \texttt{enum} for a closed set.
+
+\begin{table*}[tbp]
+\centering
+\caption{Data dictionary: every flow that crosses a process boundary.}
+\label{tab:III}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1949\textwidth-2.488pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.7451\textwidth-9.512pt\relax}@{}}
+\hline
+\textbf{Flow} & \textbf{Composition} \\
+\hline
+\texttt{telemetry\_frame} & \texttt{\{ts: ISO-8601, device\_id: string, metric: enum\{temp\_c, humidity\_pct, power\_w, door\}, value: real\}} \\
+\texttt{reading} & \texttt{telemetry\_frame + \{unit: string, quality: enum\{ok, stale\}\}} \\
+\texttt{risk\_score} & \texttt{\{ts, room\_id, mri: 0..100, toi: 0..100, drivers: enum\{mold, heat, duty, cooking\}*\}} \\
+\texttt{candidate} & \texttt{\{action\_id, device\_id, verb: enum(7), params: map, risk\_class: enum\{L1, L2\}, reversible: bool, est\_energy\_wh: real\}} \\
+\texttt{ranked\_list} & \texttt{candidate* ordered by (severity desc, est\_energy\_wh asc)} \\
+\texttt{approval\_request} & \texttt{\{request\_id, candidate, asked\_at, expires\_at = asked\_at + 300 s, channel: enum\{voice, screen\}\}} \\
+\texttt{decision} & \texttt{enum\{approved, declined, expired\}} \\
+\texttt{explanation} & \texttt{\{text: string, at most 240 characters, source: enum\{model, template\}\}} \\
+\texttt{actuator\_command} & \texttt{\{device\_id, verb, params, issued\_by: enum\{auto, user\}, at\}} \\
+\texttt{audit\_event} & \texttt{\{event\_id, at, actor: enum\{system, user, model\}, action\_id?, reason\_code, before: json, after: json\}} \\
+\hline
+\end{tabular}
+\end{table*}
+
+Three entries carry more weight than the rest. \texttt{risk\_score.drivers} is what makes an explanation possible without asking the model to invent a cause: the reason is computed by the same function that computed the score, and P5 only has to phrase it. \texttt{explanation.source} exists so that a template fallback is visible in the audit log rather than silently indistinguishable from model output. \texttt{audit\_event.reason\_code} is the only field that survives a disagreement about what happened, so it is a closed enumeration rather than free text.
+
+\begin{table*}[tbp]
+\centering
+\caption{Data dictionary: the four stores.}
+\label{tab:IV}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1689\textwidth-8.625pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3892\textwidth-19.875pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1102\textwidth-5.625pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1395\textwidth-7.125pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1322\textwidth-6.750pt\relax}@{}}
+\hline
+\textbf{Store} & \textbf{Contents} & \textbf{Written by} & \textbf{Read by} & \textbf{Retention} \\
+\hline
+D1 Device state & Current mode, setpoint, power state per device & P1 & P3, P4 & Current value only \\
+D2 Risk history & \texttt{risk\_score} rows & P2 & P3 for cooldown, P6 & 24 hours, rolling \\
+D3 Policy and whitelist & Seven verbs, allowed devices, class, minimum interval & Build time only & P3, P4 & Static \\
+D4 Audit log & \texttt{audit\_event} rows & P6 & UC-8 & Whole project \\
+\hline
+\end{tabular}
+\end{table*}
+
+D3 being written only at build time is a deliberate restriction rather than an implementation detail. Nothing the system does at run time can widen its own permission, so a bug in P3 cannot grant itself a verb that was not in the table when the process started.
+
+\section{Behavioural Specification}
+
+\subsection{The autonomy cycle}
+
+Figure~\ref{fig:3} is the state machine that P2 through P6 jointly implement. One tick is one second. The machine has a single starting point and three ways to end a cycle, and every one of them returns to IDLE through the same reset path, so there is no state in which the house is left waiting.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig3_state.png}
+\caption{Decision cycle. The only path from SELECT to an actuator runs through L1\_RUN or through L2\_WAIT and an explicit approval.}
+\label{fig:3}
+\end{figure*}
+
+\begin{table*}[tbp]
+\centering
+\caption{Transition table for the cycle in Figure~\ref{fig:3}.}
+\label{tab:V}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1251\textwidth-6.386pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1945\textwidth-9.933pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2918\textwidth-14.900pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2223\textwidth-11.353pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1063\textwidth-5.428pt\relax}@{}}
+\hline
+\textbf{State} & \textbf{Event} & \textbf{Guard} & \textbf{Action} & \textbf{Next} \\
+\hline
+IDLE & Tick & --- & Read D1, sample devices & SCORING \\
+SCORING & Score computed & \texttt{max(mri, toi) < 50.0} & Append to D2 & IDLE \\
+SCORING & Score computed & \texttt{max(mri, toi) >= 50.0} and cooldown clear & Query D3 for candidate verbs & SELECT \\
+SELECT & Candidate chosen & \texttt{risk\_class = L1} & Issue actuator command & L1\_RUN \\
+SELECT & Candidate chosen & \texttt{risk\_class = L2} & Create \texttt{approval\_request} & L2\_WAIT \\
+SELECT & No candidate, or model error & --- & Record refusal reason & SAFE\_HOLD \\
+L2\_WAIT & Decision received & \texttt{approved} & Issue actuator command & L1\_RUN \\
+L2\_WAIT & Decision received & \texttt{declined} & Discard request & ABORTED \\
+L2\_WAIT & Timer & \texttt{now >= expires\_at} (300 s) & Discard request, no state change & ABORTED \\
+L1\_RUN & Command issued & --- & Append \texttt{audit\_event} & NOTIFY \\
+NOTIFY & Notice shown & --- & Start 180 s cooldown & IDLE \\
+ABORTED, SAFE\_HOLD & --- & --- & Append \texttt{audit\_event} & IDLE \\
+\hline
+\end{tabular}
+\end{table*}
+
+The guard on the cooldown row deserves a note. The 180 s window is not a latency budget; it is a debounce. Without it, a risk score that hovers at the threshold would fire the same ventilation command every second, which is both wasteful and, for a device with a compressor, damaging. The cooldown is read from D2, which is why P2 writes to that store rather than keeping the score in memory.
+
+\subsection{A Level 2 request while the model is down}
+
+Figure~\ref{fig:4} traces one Level 2 request end to end and shows where the model is, and is not, on the critical path. Steps 1 to 3 are deterministic. Step 4 asks the model for a sentence; step 5 may return nothing at all, and if it does, step 5a substitutes a template. Steps 6 to 9 then run unchanged. The house asks the person the same question whether or not the model answered.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig4_sequence.png}
+\caption{A Level 2 request. Step 5 may fail; steps 6 to 9 do not depend on it, which is what keeps the house usable when the model is unavailable.}
+\label{fig:4}
+\end{figure*}
+
+This is the behavioural half of the claim made in Section III. The structural half is that P4 never calls P5; the model is called by the process that produces the sentence, and the sentence is a parameter of the request, not a precondition for it.
+
+\section{Data Model}
+
+Figure~\ref{fig:5} shows the nine entities the system persists. The model is small on purpose: a household project that stores more than it needs spends its remaining weeks maintaining a schema instead of building the feature that earns marks.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig5_erd.png}
+\caption{Persistent data. Every solid line is a mandatory foreign key. AUDIT\_EVENT is drawn unconnected because a timeout or a model error produces an event with no action behind it.}
+\label{fig:5}
+\end{figure*}
+
+\begin{table*}[tbp]
+\centering
+\caption{Entities, keys and cardinality.}
+\label{tab:VI}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.2421\textwidth-9.273pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2421\textwidth-9.273pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2421\textwidth-9.273pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2136\textwidth-8.182pt\relax}@{}}
+\hline
+\textbf{Entity} & \textbf{Primary key} & \textbf{Foreign keys} & \textbf{Cardinality to parent} \\
+\hline
+HOUSEHOLD & \texttt{household\_id} & --- & Root \\
+ROOM & \texttt{room\_id} & \texttt{household\_id} & N per household \\
+DEVICE & \texttt{device\_id} & \texttt{room\_id} & N per room \\
+SENSOR\_READING & \texttt{reading\_id} & \texttt{device\_id} & N per device \\
+SCHEDULE & \texttt{schedule\_id} & \texttt{device\_id} & N per device \\
+ACTION & \texttt{action\_id} & \texttt{device\_id} & N per device \\
+APPROVAL & \texttt{approval\_id} & \texttt{action\_id} & N per action \\
+RISK\_SCORE & \texttt{score\_id} & \texttt{room\_id} & N per room \\
+AUDIT\_EVENT & \texttt{event\_id} & \texttt{action\_id} (nullable) & 0..N per action \\
+\hline
+\end{tabular}
+\end{table*}
+
+The nullable key on AUDIT\_EVENT is not sloppiness. Three of the events the system must record have no action behind them: a declined request, an expired request, and a refusal to act because no candidate existed. Forcing those into ACTION would mean writing an action row for something that never happened, which would corrupt the very table the audit is supposed to make trustworthy.
+
+\section{Use-Case Model}
+
+Figure~\ref{fig:6} shows nine use cases and two actors. The Scheduler is an actor because the 1 Hz tick is genuinely external to the logic: the system does not decide when to look, it is told.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig6_usecase.png}
+\caption{Nine use cases. The Scheduler triggers UC-1 and UC-9; the rest run inside one tick, and only UC-5, UC-7 and UC-8 wait for a person.}
+\label{fig:6}
+\end{figure*}
+
+\begin{table*}[tbp]
+\centering
+\caption{Use cases and the requirement each one serves.}
+\label{tab:VII}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.0698\textwidth-3.565pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2357\textwidth-12.033pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1658\textwidth-8.468pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3055\textwidth-15.599pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1632\textwidth-8.334pt\relax}@{}}
+\hline
+\textbf{ID} & \textbf{Use case} & \textbf{Actor} & \textbf{Trigger} & \textbf{Requirement} \\
+\hline
+UC-1 & Monitor house state & Scheduler & Tick & FR-1 \\
+UC-2 & Score mold risk & --- (invoked by UC-1) & Risk score requested & FR-2 \\
+UC-3 & Score heat risk & --- (invoked by UC-1) & Risk score requested & FR-2 \\
+UC-4 & Auto-act at Level 1 & --- (invoked by UC-1) & L1 candidate selected & FR-3 \\
+UC-5 & Request approval at Level 2 & Member & L2 candidate selected & FR-3, FR-5 \\
+UC-6 & Explain an action & Member & Action issued or about to be issued & FR-4 \\
+UC-7 & Shift a schedule & Member & Explicit request & FR-3 \\
+UC-8 & Review audit trail & Member & Explicit request & NFR-3 \\
+UC-9 & Expire a stale request & Scheduler & 300 s elapsed with no decision & FR-5 \\
+\hline
+\end{tabular}
+\end{table*}
+
+The three use cases that carry the design thesis are specified below in the usual form. The remaining six follow the same template in Appendix B of the repository.
+
+\subsection{UC-4 Auto-act at Level 1}
+
+\textbf{Actor.} None. Invoked by UC-1.
+
+\textbf{Precondition.} A risk score of at least 50.0, a candidate with \texttt{risk\_class = L1}, and no action of the same verb on the same device within 180 s.
+
+\textbf{Main flow.} (1) P3 returns the highest-severity L1 candidate. (2) P4 checks the verb against D3 and confirms \texttt{reversible = true}. (3) P4 issues \texttt{actuator\_command}. (4) P6 writes \texttt{audit\_event} with \texttt{actor = system}. (5) P5 produces a one-sentence notice; if the model is unavailable, a template is used.
+
+\textbf{Exception.} If the device does not acknowledge within 5 s, P6 records \texttt{reason\_code = NO\_ACK} and the command is not retried in this cycle.
+
+\textbf{Postcondition.} The device state in D1 differs from its previous value, and the difference is in D4.
+
+\subsection{UC-5 Request approval at Level 2}
+
+\textbf{Actor.} Household member.
+
+\textbf{Precondition.} A candidate with \texttt{risk\_class = L2} and no open request for the same device.
+
+\textbf{Main flow.} (1) P4 creates \texttt{approval\_request} with \texttt{expires\_at = now + 300 s}. (2) P5 supplies a sentence, or a template if the model is unavailable. (3) The overlay shows the action, the reason and a countdown. (4) The member approves. (5) P4 issues the command; P6 records \texttt{actor = user}.
+
+\textbf{Alternative.} The member declines: the request is discarded, the schedule is unchanged, and the refusal is logged with the member's decision.
+
+\textbf{Exception.} No decision within 300 s: the request expires, no command is issued, and \texttt{audit\_event} records \texttt{reason\_code = EXPIRED}. The risk score is not suppressed, so the next cycle may ask again, but not before the cooldown has elapsed.
+
+\textbf{Postcondition.} Either the device state changed and D4 records who approved it, or nothing changed and D4 records why.
+
+\subsection{UC-6 Explain an action}
+
+\textbf{Actor.} Household member.
+
+\textbf{Precondition.} An action was issued, or a request is waiting.
+
+\textbf{Main flow.} (1) P5 receives the action and the \texttt{drivers} field of the score that produced it. (2) P5 asks the model for one sentence of at most 240 characters, with the drivers supplied rather than inferred. (3) The sentence is shown, or spoken, with the numeric score alongside it.
+
+\textbf{Exception.} If the model returns nothing within 2 s, or returns text longer than the limit, P5 falls back to a template built from the same drivers, and \texttt{explanation.source} records \texttt{template}.
+
+\textbf{Postcondition.} The person can state which risk triggered the action and what the score was, without reading a log.
+
+\section{Traceability}
+
+Table~\ref{tab:VIII} is the check that the four models agree. Each row reads: this requirement from Deliverable A is realised by this process, stored in this store, visible through this use case, and accepted by this test. A row with a gap in any column is an open issue, and Section IX lists the ones that remain.
+
+\begin{table*}[tbp]
+\centering
+\caption{Traceability from requirements in Deliverable A to processes, stores, use cases and planned acceptance tests.}
+\label{tab:VIII}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.0899\textwidth-5.737pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3595\textwidth-22.947pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1258\textwidth-8.031pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0899\textwidth-5.737pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1692\textwidth-10.799pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1057\textwidth-6.749pt\relax}@{}}
+\hline
+\textbf{Req.} & \textbf{Statement} & \textbf{Process} & \textbf{Store} & \textbf{Use case} & \textbf{Test} \\
+\hline
+FR-1 & 1 Hz telemetry ingestion & P1 & D1 & UC-1 & T-01 \\
+FR-2 & MRI and TOI computation & P2 & D2 & UC-2, UC-3 & T-02, T-03 \\
+FR-3 & Level 1 and Level 2 actions & P3, P4 & D3, D4 & UC-4, UC-5, UC-7 & T-04, T-05 \\
+FR-4 & Inclusive conversational interface & P5 & --- & UC-6 & T-06 \\
+FR-5 & 300 s fail-safe timeout & P4 & D4 & UC-9 & T-07 \\
+NFR-1 & Risk check under 1.2 ms & P2 & --- & --- & T-08 \\
+NFR-2 & Local simulation containment & all & --- & --- & T-09 \\
+NFR-3 & Strict whitelist safety & P4 & D3 & --- & T-10 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\section{The Grading Rule, Stated Formally}
+
+Deliverable A says that low-risk actions run automatically and high-risk actions need approval. That sentence is not yet a specification, because "low-risk" is a judgement and two members of the team can disagree about it without either being wrong. This section replaces the judgement with a test.
+
+\textbf{Rule.} An action is Level 1 if and only if it can be undone within 10 seconds, at no cost, without the person doing anything other than tapping once. Every other action is Level 2.
+
+The rule has three consequences that the rest of the document already assumes.
+
+It makes the class \textbf{derivable rather than assignable}. Table~\ref{tab:IX} lists the seven verbs with the reason for each class, and in every row the class follows from the reversibility test rather than from a feeling about how much power the device draws. A reviewer who disagrees with a row has to disagree with a stated property, not with an opinion.
+
+It makes the \textbf{audit log meaningful}. Every Level 1 row in D4 is an action the person could have taken back and did not. That is a much stronger statement than "the system decided this was safe", because it is a statement about what actually happened rather than about what the system believed.
+
+It gives the \textbf{interface a job it can actually do}. A Level 1 notice is not a notification; it is an undo affordance with a countdown. The design in UC-4 step 5 follows from this: the notice must appear while the action can still be reversed, which sets a hard deadline on P5 that the model can miss but the template cannot.
+
+\begin{table*}[tbp]
+\centering
+\caption{The action whitelist. The class column follows from the reversibility rule above, not from the device's power rating.}
+\label{tab:IX}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.0477\textwidth-3.048pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1928\textwidth-12.305pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1116\textwidth-7.124pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0507\textwidth-3.238pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0955\textwidth-6.095pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4417\textwidth-28.190pt\relax}@{}}
+\hline
+\textbf{\#} & \textbf{Verb} & \textbf{Device} & \textbf{Class} & \textbf{Undoable in 10 s} & \textbf{Reason for the class} \\
+\hline
+1 & \texttt{ventilate\_drum} & Washer & L1 & Yes & Runs a 3 W fan for 60 s; stopping it restores the previous state \\
+2 & \texttt{redirect\_purifier} & Air purifier & L1 & Yes & Changes airflow direction only; no schedule is touched \\
+3 & \texttt{extract\_hood} & Range hood & L1 & Yes & Already running during cooking; the command only raises the speed \\
+4 & \texttt{precool\_room} & Air conditioner & L1 & Yes & Setpoint lowered by 1 $^{\circ}$C, capped, and the previous value is stored \\
+5 & \texttt{boost\_fan} & Bathroom fan & L1 & Yes & On or off, no state to lose \\
+6 & \texttt{shift\_schedule} & Dryer & L2 & No & Moves a plan the person set; undoing it does not restore the original slot \\
+7 & \texttt{preheat\_cooktop} & Oven or cooktop & L2 & No & Raises a surface to 200 $^{\circ}$C; cooling is not an undo \\
+\hline
+\end{tabular}
+\end{table*}
+
+Every row is a claim that can be checked against the code: the undo for rows 1 to 5 is one stored previous value per device, and rows 6 and 7 have no undo because the previous state is not recoverable in ten seconds at no cost. That asymmetry, rather than the power rating, is what the class column records.
+
+This rule is the part of the design we would defend first, and it is the part that we expect to revise most during implementation.
+
+\section{Development Environment}
+
+\subsection{Platform and language}
+
+FSD-Home is a \textbf{web application served by one Python process}. Both halves of that sentence follow from who uses the system and where.
+
+\textbf{Platform: web, not a native app.} The person who needs to answer a Level 2 request is standing in a kitchen with a phone in one hand. A browser tab costs them nothing to open; an install costs them a decision. It also removes a deployment problem that would otherwise be ours: the same artefact runs on a laptop during development and on a server for the demo, so the demo does not depend on which of four laptops is in the room.
+
+\textbf{Language: Python 3.11 or newer, standard library only.} Three reasons, in order of weight. The two pieces of logic that matter --- the risk model in Section IV and the state machine in Section V --- are arithmetic and state transitions, and Python expresses them in a form a reviewer can check against this document. The model provider is a plain HTTPS JSON endpoint, so there is no SDK and therefore no version of a vendor library that can break the build the night before a deadline. And with four people on the project, "no dependencies" means no environment drift: the code that runs on one laptop runs on the others.
+
+\textbf{Front end: plain HTML, CSS and ES2020 JavaScript, no framework and no build step.} The interface is one screen and one overlay. A bundler would add a toolchain to maintain and a step that can fail during a demo, in exchange for state management that nine use cases do not need.
+
+\textbf{Storage: SQLite, one file.} One household, one process, no concurrent writers. A database server would be a service to install, secure and keep alive for a workload that fits in a few megabytes.
+
+\begin{table*}[tbp]
+\centering
+\caption{Stack decisions and the reason for each.}
+\label{tab:X}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1000\textwidth-2.553pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3533\textwidth-9.021pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4867\textwidth-12.426pt\relax}@{}}
+\hline
+\textbf{Layer} & \textbf{Choice} & \textbf{Why this and not the obvious alternative} \\
+\hline
+Server & Python 3.11, standard library \texttt{http.server} & No dependency to install; the whole app is one \texttt{python run.py} \\
+Front end & HTML + CSS + ES2020, no framework & One screen and one overlay; a build step is a liability in a demo \\
+Storage & SQLite 3, single file & One household, one writer; no service to keep alive \\
+Model access & HTTPS JSON POST to the GLM endpoint & No SDK, so no vendor library can break the build \\
+Tests & \texttt{unittest}, 247 cases in the reference implementation & Runs with the same interpreter; nothing to install \\
+Version control & Git + GitHub, public repository & Required by the course; also how four people avoid overwriting each other \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Cost estimation}
+
+The project is deliberately cheap, and the only recurring cost is the model API.
+
+\begin{table*}[tbp]
+\centering
+\caption{Cost estimation for the build. Prices are as of November 2026.}
+\label{tab:XI}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1436\textwidth-5.500pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.2481\textwidth-9.500pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0783\textwidth-3.000pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4700\textwidth-18.000pt\relax}@{}}
+\hline
+\textbf{Item} & \textbf{Choice} & \textbf{Cost} & \textbf{Note} \\
+\hline
+Compute & Oracle Cloud Always Free, Seoul region & \textbf{\$0} & ARM Ampere A1, 4 OCPU / 24 GB, free with no expiry \\
+Fallback compute & Vultr, Seoul, 2 vCPU / 2 GB & \$12 / month & Only if the free tier is unavailable; about \$72 for the term \\
+Domain name & none, reached by IP and port & \$0 & A domain is optional and adds no capability for a demo \\
+TLS certificate & Let's Encrypt & \$0 & Needed only once a domain is added \\
+Model API & GLM-4.6, pay per token & \textbf{< \$3} & Roughly 1,000 calls at demo volume \\
+Tooling & VS Code, Git, Python, SQLite & \$0 & Already installed on all four machines \\
+Hardware & existing laptops & \$0 & No purchase required \\
+\textbf{Total for the term} &  & \textbf{\$0 -- \$75} & The upper bound assumes the free tier fails and the term runs six months \\
+\hline
+\end{tabular}
+\end{table*}
+
+No software is purchased and no hardware is bought. If the free tier is refused, the fallback is twelve dollars a month, which is the only line item in this table that could realistically be incurred.
+
+\subsection{Development environment details}
+
+The build runs on four ordinary laptops. The only requirement beyond a stock install is that all four agree on the Python version, because the code is standard library only and a version split would stay invisible until it broke a build.
+
+\begin{table*}[tbp]
+\centering
+\caption{Each member's machine. Rows marked TBD are filled in by that member before submission.}
+\label{tab:XII}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1306\textwidth-6.668pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.1143\textwidth-5.835pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0979\textwidth-5.001pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0979\textwidth-5.001pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4993\textwidth-25.495pt\relax}@{}}
+\hline
+\textbf{Member} & \textbf{OS} & \textbf{Python} & \textbf{Editor} & \textbf{Role in the build} \\
+\hline
+Tang Bin & Windows 11 & 3.11.x & VS Code & Risk model, gate, agent loop, deployment \\
+Ha Yun Kim & TBD & TBD & TBD & Architecture, interface, documentation, Git workflow \\
+SooYoung Song & TBD & TBD & TBD & Requirements, safety policy, test cases \\
+Ruitan Sun & TBD & TBD & TBD & User needs, usability sessions, simulator data \\
+\hline
+\end{tabular}
+\end{table*}
+
+Common to all four machines: Git 2.x, a Chromium or Firefox browser for the interface, and no Python package installed beyond the standard library. The reference implementation runs on 2 CPU cores and 8 GB of RAM; nothing in the system needs more.
+
+\subsection{Cloud platform}
+
+The course offers a bonus for using a commercial cloud platform. We use one, and not only for the bonus: the professor's point that a demo run from a laptop fails at the worst moment is correct, and a public URL also lets the reviewer check the system after the class has ended.
+
+\begin{table*}[tbp]
+\centering
+\caption{Deployment target.}
+\label{tab:XIII}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.0767\textwidth-1.959pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3047\textwidth-7.779pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.5586\textwidth-14.262pt\relax}@{}}
+\hline
+\textbf{Item} & \textbf{Choice} & \textbf{Why} \\
+\hline
+Region & Seoul (\texttt{ap-seoul-1}) & 5--15 ms from the team; no filing requirement applies to a Korean-hosted server \\
+Provider & Oracle Cloud Always Free & The same IaaS shape as AWS or GCP --- a VM, a virtual network, object storage --- with the bill removed \\
+Runtime & one \texttt{systemd} unit plus a reverse proxy & Survives an SSH disconnect; a plain \texttt{python run.py} does not \\
+Update & \texttt{deploy.sh} = \texttt{git pull} then restart & Four people, one command, one result \\
+Secrets & the model API key in an environment file, never in Git & The repository is public \\
+\hline
+\end{tabular}
+\end{table*}
+
+The deployment is deliberately boring. The interesting part of this project is the gate, and a deployment that needs attention is a deployment that will take attention away from it.
+
+\subsection{Software in use}
+
+Existing systems do parts of what FSD-Home does. We reuse their ideas and their published numbers, not their code.
+
+\begin{table*}[tbp]
+\centering
+\caption{Existing systems and algorithms, and what we take from each.}
+\label{tab:XIV}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1996\textwidth-7.644pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3090\textwidth-11.836pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3734\textwidth-14.301pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.0579\textwidth-2.219pt\relax}@{}}
+\hline
+\textbf{System or work} & \textbf{What it does} & \textbf{What we take} & \textbf{Ref.} \\
+\hline
+LG ThinQ, ThinQ ON & Per-device automation and routine recommendation & The baseline we are measured against; no code reused & [1], [15] \\
+Samsung SmartThings, Bespoke AI & Pattern notifications and routines & Baseline for the routine feature & [2], [16] \\
+Home Assistant & Local rule engine for home automation & The idea of a local rule engine that outlives the network & --- \\
+SAE J3016 & Six levels of driving automation & The Level vocabulary and the notion of a graded handover & --- \\
+R-Judge, Yuan et al. & Benchmark for LLM agent safety & The argument that an LLM must not hold execution authority & [5] \\
+ASHRAE 55, EPA mold guide & Comfort and moisture thresholds & The numbers 24 $^{\circ}$C, 27 $^{\circ}$C and 70 \% relative humidity & [3], [4] \\
+PromptShield Home, Zhang et al. & Prompt-injection defence for smart homes & Separating intent parsing from actuation & [7] \\
+\hline
+\end{tabular}
+\end{table*}
+
+Nothing is vendored. The only external service the system calls is the model endpoint, and Section V-B shows what happens when that call fails.
+
+\subsection{Task distribution}
+
+Work is split by artefact rather than by layer, so that each member owns something that can be checked on its own and no file has two owners.
+
+\begin{table*}[tbp]
+\centering
+\caption{Task distribution for Deliverables B and C.}
+\label{tab:XV}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1177\textwidth-3.006pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4501\textwidth-11.492pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.3722\textwidth-9.503pt\relax}@{}}
+\hline
+\textbf{Member} & \textbf{Responsible for} & \textbf{Artifacts} \\
+\hline
+Tang Bin & Risk model, gate, agent loop, deployment & \texttt{app/risk.py}, \texttt{app/policy.py}, \texttt{deploy.sh} \\
+Ha Yun Kim & Architecture, interface, documentation, Git workflow & Fig. 1, Fig. 6, this document \\
+SooYoung Song & Requirements, safety policy, acceptance tests & Table~\ref{tab:IX}, tests T-01 to T-10 \\
+Ruitan Sun & User needs, usability sessions, simulator data & Simulator traces, wording tests for UC-6 \\
+\hline
+\end{tabular}
+\end{table*}
+
+The split has one consequence worth stating: the person who writes the policy in Table~\ref{tab:IX} is not the person who implements the gate that enforces it, which is why the acceptance tests for the gate are written before the gate itself.
+
+\section{Specifications}
+
+This section answers the question the course outline asks under "IV. Specifications": for each requirement, how will it actually be built. The answers are written as pseudocode at the level of detail a reader can check against Section V, with a flow diagram where the control flow is the point.
+
+\subsection{FR-1, telemetry ingestion}
+
+The simulator produces one frame per device per second. Ingestion does two things beyond storing the value: it marks a frame older than five seconds as stale, and it never overwrites a fresher value with an older one. The stale flag is what lets P2 decline to score a room rather than score it on old data.
+
+\begin{lstlisting}
+EVERY 1 s:
+    FOR frame IN simulator.next_tick():
+        IF now() - frame.ts > 5 s THEN
+            frame.quality <- "stale"
+        END IF
+        IF frame.ts > D1.last_ts(frame.device_id, frame.metric) THEN
+            upsert(D1, frame.device_id, frame.metric, frame.value, frame.quality)
+        END IF
+    END FOR
+\end{lstlisting}
+
+\subsection{FR-2, risk computation}
+
+Both indices are pure functions of the current reading and the device's state. Nothing is learned, nothing is remembered between calls, which is what makes the counterfactual in Section IX cheap: the same function runs twice with different inputs.
+
+\begin{lstlisting}
+FUNCTION score(reading, state) RETURNS risk_score:
+    mri <- clamp( (reading.humidity - 70.0) * 3.2
+                + state.sealed_hours * 6.0
+                + max(0.0, reading.temp - 24.0) * 1.5 , 0, 100 )
+    toi <- clamp( reading.heat_w / 25.0
+                + max(0.0, reading.temp - 27.0) * 6.0
+                + max(0.0, reading.duty - 0.6) * 60.0
+                + cooking_boost(now()) , 0, 100 )
+    drivers <- the two terms that contributed most to mri and toi
+    append(D2, {now(), reading.room_id, mri, toi, drivers})
+    RETURN {mri, toi, drivers}
+\end{lstlisting}
+
+\texttt{drivers} is computed here rather than by the model. It is the reason an explanation can name a cause without inventing one: P5 receives the two terms that actually moved the score.
+
+\subsection{FR-3, the gate}
+
+This is the only function in the system that can issue an actuator command, and it is short on purpose. Figure~\ref{fig:7} is the same logic as a flow chart.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig7_gate.png}
+\caption{The gate. Four checks reject; the fifth decides whether the person is asked or merely told.}
+\label{fig:7}
+\end{figure*}
+
+\begin{lstlisting}
+FUNCTION gate(candidate, policy, now) RETURNS outcome:
+    entry <- policy.lookup(candidate.verb)
+    IF entry = NULL                      THEN RETURN refuse("NOT_WHITELISTED")
+    IF candidate.device NOT IN entry.devices
+                                         THEN RETURN refuse("DEVICE_NOT_ALLOWED")
+    IF now - last_fired(candidate.device, candidate.verb) < entry.min_interval_s
+                                         THEN RETURN refuse("COOLDOWN")
+    IF NOT entry.limits.contains(candidate.params)
+                                         THEN RETURN refuse("PARAM_OUT_OF_RANGE")
+
+    IF entry.reversible THEN
+        issue(candidate, issued_by = "auto")
+        open_undo(candidate, seconds = 10)
+        RETURN accepted("L1")
+    ELSE
+        request <- create_request(candidate, expires_at = now + 300 s)
+        RETURN pending(request)
+    END IF
+\end{lstlisting}
+
+\texttt{refuse()} writes one \texttt{audit\_event} with the reason code and returns without touching any device. Every rejection in Table~\ref{tab:VIII}'s T-10 test case is one of these four lines.
+
+\subsection{FR-4, explanation}
+
+The explanation never gates an action. It is attempted, and if it fails the template takes over, as Figure~\ref{fig:8} shows.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig8_explain.png}
+\caption{Explanation and its fallback. The person sees one sentence either way; only the recorded source differs.}
+\label{fig:8}
+\end{figure*}
+
+\begin{lstlisting}
+FUNCTION explain(action, drivers) RETURNS explanation:
+    prompt <- TEMPLATE(action, drivers)
+    TRY
+        text <- http_post(GLM_ENDPOINT, prompt, timeout = 2.0 s)
+        IF text = NULL OR length(text) > 240 THEN RAISE
+        RETURN {text, source = "model"}
+    CATCH timeout, http_error, invalid_reply
+        RETURN {text: template_sentence(drivers), source = "template"}
+\end{lstlisting}
+
+The length check is part of the contract rather than a formatting preference: a reply longer than 240 characters does not fit the overlay, and an overlay that scrolls is an overlay a person stops reading.
+
+\subsection{FR-5, timeout}
+
+\begin{lstlisting}
+EVERY 1 s:
+    FOR request IN open_requests WHERE now() >= request.expires_at:
+        close(request, decision = "expired")
+        log(actor = "system", reason_code = "EXPIRED")
+        -- the device state is deliberately not touched
+\end{lstlisting}
+
+Expiry is not a failure of the request; it is the request's normal end when nobody answers. The distinction matters for the audit log, which would otherwise record a quiet house as a series of errors.
+
+\section{Assumptions, Constraints and Open Issues}
+
+\textbf{A-1.} All telemetry is simulated from recorded JSONL and CSV traces. No physical device is contacted at any point, which is what NFR-2 requires and what makes the failure cases in Section V reproducible.
+
+\textbf{A-2.} The risk thresholds (50.0 for both indices, 70.0 \% relative humidity, 24 $^{\circ}$C and 27 $^{\circ}$C reference temperatures) are taken from the sources cited in Deliverable A, not fitted to our simulator. If a reviewer asks for calibration, the honest answer is that calibration is future work.
+
+\textbf{A-3.} One household per deployment. Multi-tenant isolation is out of scope, and the schema reflects that in a single HOUSEHOLD row.
+
+\textbf{O-1.} The reversibility window of 10 seconds is a placeholder. It needs one number from a usability test, and until then it is an assumption rather than a measurement.
+
+\textbf{O-2.} UC-7, shifting a schedule, is the only use case whose Level 2 status depends on a plan the person set rather than on a device property. It may need its own class.
+
+\textbf{O-3.} The 2 s budget in UC-6 is inherited from the measured 2 to 3 s model latency in Deliverable A. If the deployment target changes, the template fallback rate changes with it, and that rate should be reported rather than hidden.
+
+\end{document}
