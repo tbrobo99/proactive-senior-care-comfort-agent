@@ -712,6 +712,17 @@ FUNCTION explain(action, drivers) RETURNS explanation:
 
 The length check is part of the contract rather than a formatting preference: a reply longer than 240 characters does not fit the overlay, and an overlay that scrolls is an overlay a person stops reading.
 
+FR-4 in Deliverable A is stated as four measurable commitments, and the overlay is where they are either met or not. Each one is fixed here as a number, so the interface can be checked rather than admired.
+
+\begin{itemize}
+  \item \textbf{Spoken as well as shown.} Every overlay string is also passed to \texttt{speechSynthesis} with the same text. T-06 asserts the two strings are equal, so the spoken and written versions cannot drift apart.
+  \item \textbf{High contrast, WCAG 2.2.} Text and background pairs come from a fixed palette at 7:1 or better; the body text floor is 4.5:1. The contrast ratio is computed in the test, not judged by eye.
+  \item \textbf{Touch targets of at least 24 $\times$ 24 px.} The undo affordance and both approval buttons are built at 48 $\times$ 48 px, twice the requirement. A 24 px target is the legal minimum and it is still hard to hit while standing at a stove with one hand, which is the posture UC-4 and UC-5 assume. The test asserts 48 px so that a later style change cannot quietly shrink back to the minimum.
+  \item \textbf{One sentence.} The 240-character limit in the listing above, with the template fallback behind it, so a long model reply cannot break the layout.
+\end{itemize}
+
+The third item is the only place in this document where the implementation deliberately exceeds a stated requirement. The reason is in the sentence itself: the requirement was written for a person sitting at a desk, and the use case is written for a person who is not.
+
 \subsection{FR-5, timeout}
 
 \begin{lstlisting}

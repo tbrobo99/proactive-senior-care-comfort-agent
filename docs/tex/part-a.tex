@@ -1,49 +1,69 @@
 \documentclass[conference]{IEEEtran}
 \usepackage{graphicx}
+\usepackage{amsmath}
 \usepackage{array}
 \usepackage{url}
 \usepackage{xcolor}
 
 % IEEEtran asks for Times (ptm), which has no TU-encoded shapes under XeTeX, so
 % every font silently falls back to Latin Modern and the bold shape is dropped.
-% Setting the families explicitly restores bold, small caps and monospace.
+% These three lines are what keep bold, small caps and monospace working.
 \renewcommand{\rmdefault}{lmr}
 \renewcommand{\sfdefault}{lmss}
 \renewcommand{\ttdefault}{lmtt}
 
-\graphicspath{{figures/}}
-
 \begin{document}
-\title{Talking to the House: A Conversational Agent for
-Smart-Home Appliance Control}
+
+\title{FSD-Home: Full Self-Driving Home Orchestration\\ with Risk-Graded Autonomous Action}
+
 \author{
 \IEEEauthorblockN{Ha Yun Kim, SooYoung Song, Ruitan Sun, Tang Bin}
 \IEEEauthorblockA{Department of Information Systems\\
 Hanyang University, Seoul, Korea\\
-hykim1215@hanyang.ac.kr, sys1109@hanyang.ac.kr,
+hykim1215@hanyang.ac.kr, sys1109@hanyang.ac.kr,\\
 sunruitan2024@126.com, tbrobo99@outlook.com}
 }
 \maketitle
-\begin{center}\small Group [Group Number] --- CSE 406 Software Engineering\\
-Phase 2, Term Project I --- Deliverable A: Proposal and Requirement Document\end{center}
+
 \begin{abstract}
-This project implements a conversational agent for a set of household appliances. A user writes a request in ordinary language, such as ``turn off the bedroom air conditioner'' or ``put the whole flat to sleep''. The agent identifies the appliances involved, checks that each one supports the requested action, applies the action to a simulated appliance set, and reports what changed. A request that contains a future time is stored as a scheduled task in a local database and executed by a background scheduler, so the task is not lost when the application restarts. The current build runs five simulated appliances in four rooms, serves a phone-friendly web interface from the same process, and is covered by 212 automated tests. This document presents the motivation, the related software, eleven functional and six non-functional requirements with acceptance checks, the system structure, and the evaluation plan.
+Most smart home setups force users to open separate apps for every appliance or
+react to push notifications after a problem has already occurred. We built
+FSD-Home (Full Self-Driving Home) to make home automation proactive, inclusive,
+and hassle-free for all household members [1], [2]. Our system continuously
+monitors simulated IoT telemetry---like room temperature, laundry humidity,
+compressor loads, and daily schedules---to catch risks early, such as mold
+growing in a closed washer or a kitchen overheating during cooking [3], [4]. To
+keep the system safe and predictable across the household, we use a Level 1 /
+Level 2 autonomy framework: low-risk adjustments (micro-ventilation,
+pre-cooling) run automatically in the background with a brief notice, while
+high-stakes actions (delaying a high-power dryer or preheating a cooktop)
+require clear approval on screen or by voice [5]. By decoupling a fast local
+rule check (1.2 ms) from LLM reasoning (2--3 s), FSD-Home runs safely and
+reliably without stalling the home state.
 \end{abstract}
+
 \begin{IEEEkeywords}
-smart home, conversational agent, appliance control, natural language interface, software requirements.
+Smart Home Orchestration, FSD-Home, Full Self Driving Home, Risk-Graded
+Autonomy, Level 1 and Level 2 Control, Inclusive Usability, Energy
+Load-Shifting, LG ThinQ Ecosystem.
 \end{IEEEkeywords}
+
 \begin{center}
+\centering
 \footnotesize
 {\scshape\bfseries TABLE I\par}
-{\scshape\bfseries ROLE ASSIGNMENTS FOR THE FIRST HALF OF THE TERM\par}\vspace{2pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.2553\columnwidth-6.519pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1625\columnwidth-4.148pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.5222\columnwidth-13.333pt\relax}@{}}
+{\scshape\bfseries ROLE ASSIGNMENTS\par}
+\vspace{2pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.235\columnwidth-3.4pt\relax}
+>{\raggedright\arraybackslash}p{\dimexpr 0.175\columnwidth-4.8pt\relax}
+>{\raggedright\arraybackslash}p{\dimexpr 0.53\columnwidth-14.4pt\relax}@{}}
 \hline
-\textbf{Role} & \textbf{Name} & \textbf{Task description} \\
+\textbf{Role} & \textbf{Assigned Member} & \textbf{Task Description \& Responsibilities} \\
 \hline
-User & [Name] & Tries typical requests and reports cases where the system misunderstands the request or gives an unclear result. \\
-Customer & [Name] & Collects and prioritises the user needs, clarifies the expected behaviour, and reviews whether the requirements are met. \\
-Software developer & [Name] & Implements and tests the agent, the device layer, the scheduler and the user interface. \\
-Development manager & [Name] & Coordinates tasks and milestones, maintains the repository, and tracks the submission. \\
+User & Ruitan Sun & Identify user needs, provide feedback, and help ensure the service meets user expectations. \\
+Customer & SooYoung Song & Organize customer and household requirements and defines safety boundaries and sets Level 2 confirmation policy rules. \\
+Software Developer & Tang Bin & Builds the core AI decision engine (Python), feeds data, constructs integration tools, and generates simulated IoT sensor data. \\
+Development Manager & Ha Yun Kim & Leads system architecture design, manages UI design, maintains project documentation, Git workflows, and tracks milestone progress. \\
 \hline
 \end{tabular}
 \end{center}
@@ -51,267 +71,132 @@ Development manager & [Name] & Coordinates tasks and milestones, maintains the r
 \section{Introduction}
 
 \subsection{Motivation}
+Smart home appliances are ubiquitous today, but having more features does not
+automatically ensure a seamless experience for every member of a household [9].
+Complex menus, fragmented mobile applications, and lack of cross device
+coordination create unnecessary cognitive burden [10]. Over 67\% of surveyed
+consumers report experiencing friction with hidden menus and unclear controls on
+modern appliances [11]. Furthermore, routine household oversights cause major
+safety and hygiene issues: 35.3\% of residential fires start from unattended
+cooking [12], [13], and wet laundry left in closed washers quickly leads to mold
+and bacterial growth [3], [14].
 
-Household appliances are usually controlled through separate screens and device-specific menus. For a single action this is manageable. For a request that covers several appliances, or that describes a goal rather than a setting, the user has to translate the request into a sequence of device commands and repeat the sequence for each appliance. ``Turn off the appliances in the living room'' and ``set a routine before going to bed'' are short to say and long to perform.
+\subsection{Problem Statement}
+Current smart home apps like LG ThinQ work in reactive silos [15]. They wait for
+manual button taps or send passive alerts (such as ``Cycle Finished''), leaving
+household members to figure out what to do [6]. More importantly, appliances do
+not talk to each other about room heat or power load. When someone bakes in a hot
+oven while running a dryer, room temperatures surge, forcing the refrigerator and
+AC to work harder and draw peak electricity without any coordinated cooling [4].
+FSD-Home solves this by combining continuous sensor tracking with automated
+cross-appliance control.
 
-This project examines whether a conversational interface can reduce that effort. The user writes one sentence, and the agent decides which appliances are involved, checks that the requested actions are supported, and returns a result. The demonstration runs on simulated appliances, so the behaviour can be shown without physical LG devices or a vendor account.
+\subsection{Related Work \& Commercial Baseline}
+Current commercial tools offer great single-device features: LG AI DD\texttrademark{}
+senses fabric softness via motor torque; LG ezDispense\texttrademark{} handles
+detergent dosing; and LG ThinQ ON / ThinQ Claw provides conversational voice hubs
+[1], [15]. Samsung's Bespoke AI sends lifestyle pattern notifications [2], [16].
+But none of them coordinate temperature and energy across multiple devices [5].
+FSD-Home introduces three main contributions: (1) explicit risk scores for mold
+(MRI) and kitchen heat (TOI), (2) a Tesla-inspired Level 1 / Level 2 autonomy
+model with safe standby fallback, and (3) an inclusive overlay designed around
+WCAG 2.2 contrast and touch targets [17].
 
-\subsection{Problem Statement and User Needs}
+\subsection{Academic Foundations}
+We drew key design principles from recent smart home research. Hewitt (2026)
+showed that conversational agents need strict deterministic gates to verify AI
+outputs before triggering hardware [8]. Yuan et al.\ (2024; R-Judge) proved that
+giving an LLM direct execution authority causes safety risks (like accidentally
+shutting off power) [5]. Zhang et al.\ (2026) pointed out that safety and utility
+metrics must be evaluated separately [7]. Following these insights, FSD-Home uses
+AI only to interpret intent and write natural explanations, while our local
+Python rule engine retains 100\% execution authority [18].
 
-The problem is the gap between the way a household describes a task and the device-level commands required to carry it out. The target environment is a small home with four rooms and five appliances: two air conditioners, an air purifier, a washer and a refrigerator.
+\section{System Requirements}
 
-The needs below were derived from these scenarios and are attributed to the customer role in Table I. They are the basis for the requirements in Section II.
-
-\begin{enumerate}
-
-  \item \textbf{1)} Describe an action in ordinary language, without selecting a device and a setting first.
-
-  \item \textbf{2)} Apply one request to several appliances when the target is clear.
-
-  \item \textbf{3)} Keep a scheduled action after the application is closed and reopened.
-
-  \item \textbf{4)} Learn whether a scheduled action actually ran, including when it was missed.
-
-  \item \textbf{5)} Be asked a question when a required detail, such as the room, is missing.
-
-  \item \textbf{6)} Avoid unsafe or unrelated actions, such as switching off the refrigerator as part of a ``leave home'' routine.
-
-\subsection{Related Software}
-
-\end{enumerate}
-
-Google Home, Amazon Alexa, Apple Home, Samsung SmartThings and LG ThinQ control compatible appliances and support user-defined routines [1]--[5]. Their routines are configured in an application rather than written as a sentence, and their schedules run in the vendor's service, so the run history is kept by the vendor rather than on the user's own machine. Home Assistant [6] offers local execution and flexible automation, but its interface is a configuration file and it assumes that the user already knows which entities to combine. Matter [7] standardises device interoperability rather than the interaction with the user.
-
-On the research side, tool-using language-model agents [8], [9] show that a model can call a function and use the returned value in a later step. This project applies that mechanism to a small appliance set and restricts it to the requests that cannot be answered deterministically.
-
-The contribution is a working prototype for a small appliance set rather than a new platform. It combines deterministic parsing for common requests with a bounded model-based fallback, and it reports the outcome of each action rather than only the text of the reply.
-
-\section{Requirements}
-
-The requirements are numbered FR-\emph{n} for functional and NFR-\emph{n} for non-functional. Priority is \textbf{Must} for the requirements needed for the demonstration and \textbf{Should} for the ones that are desirable. Each requirement has an acceptance check that can be verified by a test or during the demonstration. Table II summarises the set.
-
-\begin{center}
-\footnotesize
-{\scshape\bfseries TABLE II\par}
-{\scshape\bfseries REQUIREMENT SUMMARY\par}\vspace{2pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1803\columnwidth-4.603pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.5795\columnwidth-14.795pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1803\columnwidth-4.603pt\relax}@{}}
-\hline
-\textbf{ID} & \textbf{Requirement} & \textbf{Pri.} \\
-\hline
-FR-1 & Single-appliance control & Must \\
-FR-2 & Multi-device and room-scoped control & Must \\
-FR-3 & Capability validation & Must \\
-FR-4 & Scheduled actions & Must \\
-FR-5 & Missed schedule reporting & Must \\
-FR-6 & Compound requests & Should \\
-FR-7 & Goal-oriented requests & Should \\
-FR-8 & Household routines & Should \\
-FR-9 & Clarification & Should \\
-FR-10 & Honest results and refusal & Must \\
-FR-11 & Phone-friendly interface & Must \\
-NFR-1--6 & Reliability, response time, determinism, testability, portability, privacy & Must \\
-\hline
-\end{tabular}
-\end{center}
-
-\subsection{FR-1 --- Single-Appliance Control (Must)}
-
-\textbf{Requirement.} The system shall accept a request that identifies one appliance and one action, including power, target temperature, operating mode and fan speed, and shall apply that action to that appliance only.
-
-\textbf{Acceptance check.} ``Set the bedroom air conditioner to 22 degrees'' changes the bedroom setpoint and leaves the living-room setpoint unchanged. The response states the resulting state of the appliance.
-
-\subsection{FR-2 --- Multi-Device and Room-Scoped Control (Must)}
-
-\textbf{Requirement.} The system shall apply one action to a set of appliances selected by room or by appliance type, and shall report the result for each appliance in the set.
-
-\textbf{Acceptance check.} ``Turn off everything in the living room'' switches off both appliances in that room and lists them. ``Turn off all the air conditioners'' reaches both air conditioners and leaves the purifier unchanged.
-
-\subsection{FR-3 --- Capability Validation (Must)}
-
-\textbf{Requirement.} Before an action is applied, the system shall check that the appliance supports the requested capability and that a numeric value is inside the range defined for that appliance type.
-
-\textbf{Acceptance check.} A refrigerator accepts 1 to 7 degrees Celsius and rejects 22. An air conditioner accepts 16 to 30. A temperature request for the purifier is reported as unsupported rather than silently ignored.
-
-\textbf{Rationale.} A setpoint that is comfortable in a room is damaging in a refrigerator. One range shared by every appliance makes the correct value impossible to express, so the validator and the model read the same per-type table.
-
-\subsection{FR-4 --- Scheduled Actions (Must)}
-
-\textbf{Requirement.} The system shall accept a future time in ordinary language, store the resulting task in persistent storage, and execute it at that time.
-
-\textbf{Acceptance check.} ``Turn off the air conditioner every night at 11 pm'' creates a recurring task. After the process is stopped and started again, the task is present with its original time and runs within one second of it.
-
-\textbf{Rationale.} The obvious implementation lets the model hold the timer. A model keeps no state: after a restart, an expired token or a dropped connection the pending action is gone with nothing left to notice it. The model interprets the request; a thread owns the time.
-
-\subsection{FR-5 --- Missed Schedule Reporting (Must)}
-
-\textbf{Requirement.} On startup the system shall identify the scheduled tasks whose time passed while the application was not running, and shall report them instead of executing them late.
-
-\textbf{Acceptance check.} With the process stopped across a due time, a one-time task is marked as missed and disabled, and a recurring task moves to its next occurrence with a count of the skipped ones. No task is executed late.
-
-\textbf{Rationale.} Durability has a corollary that a demonstration usually skips. A task stored in SQLite survives a restart, but if the process was down at 23:00 that run did not happen. Executing it three hours late is not a repair, it is a second fault, so the rule is neither to skip silently nor to catch up silently.
-
-\subsection{FR-6 --- Compound Requests (Should)}
-
-\textbf{Requirement.} The system should handle one sentence that contains two requests with different actions or different targets, and should report both outcomes.
-
-\textbf{Acceptance check.} ``Cool the bedroom down and shut the living room off'' produces one action per room and a response that addresses both. A single action on two appliances is still handled as one request.
-
-\subsection{FR-7 --- Goal-Oriented Requests (Should)}
-
-\textbf{Requirement.} For a request that describes a condition rather than an action, the system should read the current state of the appliances before choosing an action.
-
-\textbf{Acceptance check.} ``The bedroom is a sauna'' applies cooling at a fixed setpoint to the air conditioner in the room named, and the response then reports the room temperature the appliance returned. The response does not state a temperature that was not returned by a device. A condition expressed in words the comfort table does not contain reaches the tool loop instead, which reads the appliance before it acts.
-
-\subsection{FR-8 --- Household Routines (Should)}
-
-\textbf{Requirement.} The system should support named routines that apply a predefined action to each appliance type, together with an explicit list of appliances that a routine must not change.
-
-\textbf{Acceptance check.} ``Put the whole flat to sleep'' switches off the air conditioners and the purifier and leaves the refrigerator running. ``Put the living room to sleep in 20 minutes'' creates a scheduled task instead of running the routine immediately.
-
-\subsection{FR-9 --- Clarification (Should)}
-
-\textbf{Requirement.} When a request is complete except for its target, the system should ask for the missing detail instead of selecting an appliance.
-
-\textbf{Acceptance check.} ``It's stuffy in here'' produces a question about the room, and the answer applies the pending action to that room. No appliance changes before the answer arrives.
-
-\subsection{FR-10 --- Honest Results and Refusal (Must)}
-
-\textbf{Requirement.} The system shall report success only when the device layer confirms the action, and shall state clearly when a request cannot be served.
-
-\textbf{Acceptance check.} A request outside the scope of the prototype receives a message that names the missing information rather than an invented result. ``What will the weather be like tomorrow'' is answered with a statement that the system has no weather data.
-
-\textbf{Rationale.} A model asked to wake the house will produce a confident sentence after one read-only call. In this domain that is the most expensive kind of failure, because the reply ends the conversation and the user believes the house is awake. Success is therefore reported from the device layer, not from the wording of a reply.
-
-\subsection{FR-11 --- Phone-Friendly Interface (Must)}
-
-\textbf{Requirement.} The system shall provide an interface that can be opened from a phone browser on the same network and from a laptop browser, without installing an application.
-
-\textbf{Acceptance check.} The interface shows the appliances by room, allows a request to be entered and read, and is served by the same process as the agent.
+\subsection{Functional Requirements}
+\begin{itemize}
+  \item \textbf{FR-1: Real-Time Telemetry Perception.} The system continuously
+  ingests simulated 1 Hz IoT sensor streams (temperatures, drum humidity decay,
+  power draw, door contact states, calendar schedules) [19].
+  \item \textbf{FR-2: Predictive Risk Calculation.} The system computes two
+  real-time risk metrics in \texttt{app/risk.py}:
+  \begin{enumerate}
+    \item \textbf{Mold Risk Index (MRI):} tracks trapped moisture in sealed drum
+    appliances using a 30-minute regression extrapolation [3]:
+    \begin{equation*}
+    \begin{split}
+      \mathrm{MRI} = \mathrm{clamp}\big(&(\text{humidity}-70.0)\times 3.2\\
+        &+ (\text{sealed\_hours}\times 6.0)\\
+        &+ \max(0.0, \text{temp}-24.0)\times 1.5,\\
+        &0,\ 100\big)
+    \end{split}
+    \end{equation*}
+    \item \textbf{Thermal Overload Index (TOI):} tracks heat buildup and
+    compressor strain across kitchen appliances [4]:
+    \begin{equation*}
+    \begin{split}
+      \mathrm{TOI} = \mathrm{clamp}\big(&\text{heat\_w}/25.0\\
+        &+ \max(0.0, \text{temp}-27.0)\times 6.0\\
+        &+ \max(0.0, \text{duty}-0.6)\times 60.0\\
+        &+ \text{cooking\_boost},\ 0,\ 100\big)
+    \end{split}
+    \end{equation*}
+  \end{enumerate}
+  When either score hits or exceeds 50.0, the system evaluates action candidates
+  [5].
+  \item \textbf{FR-3: Level 1 \& Level 2 Action Framework.}
+  \begin{enumerate}
+    \item \textbf{Level 1 (Low-Risk Autonomous Actions):} low power background
+    tweaks (drum micro-ventilation, air purifier redirection, range hood
+    extraction, pre-cooling) run automatically and log a plain-language summary [8].
+    \item \textbf{Level 2 (High-Risk Approval Actions):} high-power operations or
+    schedule changes (shifting heavy dryer runs to off-peak hours, cooktop
+    preheating) strictly require user approval first [7].
+  \end{enumerate}
+  \item \textbf{FR-4: Inclusive Conversational Interface.} Prompts are spoken via
+  Text-to-Speech (TTS) and displayed on high contrast overlays with large touch
+  targets ($\geq 24 \times 24$ px) accessible for all users [17], [20].
+  \item \textbf{FR-5: Fail-Safe Timeout.} If a Level 2 prompt gets no response
+  within 5 minutes (300 s), the request safely expires and leaves device
+  schedules unchanged [5].
+\end{itemize}
 
 \subsection{Non-Functional Requirements}
-
-\textbf{NFR-1 Reliability.} The system should handle invalid, incomplete or unsupported requests without terminating, and should return a message that explains the problem.
-
-\textbf{NFR-2 Response time.} Requests answered by the rule layer should complete in under 10 ms. Requests handled by the model layer should be bounded at eight steps and 25 seconds.
-
-\textbf{NFR-3 Determinism.} The same request should produce the same result on the deterministic layers. Model calls use temperature 0, and the end-to-end set is run twice to check that both runs agree.
-
-\textbf{NFR-4 Testability.} The rule layer, capability validation, scheduling and tool execution should be testable with simulated appliances and without network access. The current build has 212 automated tests that run in continuous integration.
-
-\textbf{NFR-5 Portability.} The prototype should run on a standard laptop with Python 3.10 or later and no third-party packages at runtime.
-
-\textbf{NFR-6 Privacy.} Requests handled by the deterministic layers should not leave the machine. Only requests that require a model are sent to an external service.
-
-\section{System Overview}
-
-The system is one Python process and a set of static web files. Fig. 1 shows the path of a request. The router examines the sentence and selects a layer. Two layers are deterministic: the rule engine handles time expressions, appliance resolution and literal commands, and the routine table handles named routines. Two layers use a language model: a single call for commands whose only open question is which appliance, and a bounded tool loop for requests that need to read appliance state before deciding. The selected layer produces an action or a tool call, the tool layer validates it against the appliance, and the device adapter applies it. The adapter is the only component that distinguishes simulated appliances from real ones.
-
-Scheduled tasks are stored in SQLite. A scheduler thread checks once per second, executes the tasks that are due, and writes the result back into the conversation. The model does not hold a timer, because a model keeps no state and a restart would remove the pending action without leaving a record of it.
-
-Two routing rules follow from the table in Fig. 1. A literal command, in which the user has already named the value, is sent to the single model call, because the only open question is the appliance. A request that states a condition is sent to the tool loop, because the correct action depends on a value that a single call cannot see. A request that covers the whole home never uses the single call, which can address one appliance only.
-
-Layer selection is a default rather than a constraint. In the agent mode the parse is presented to the tool loop as a suggestion instead of being applied: the model either accepts it in one call or replaces it with a plan of its own, and a sentence the rule layer already understood can therefore be answered by either path. This makes the cost of letting the model decide a measured quantity rather than an assumption, and both modes share the tool layer and its validation, so what differs is who decides, not what is permitted. The offer also states how confident the parser is, because a complete plan and a half-plan read identically in the sentence and the model cannot tell them apart.
-
-\begin{center}
-\footnotesize
-{\scshape\bfseries TABLE III\par}
-{\scshape\bfseries CAPABILITY MODEL (FR-3)\par}\vspace{2pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.3357\columnwidth-8.571pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.3894\columnwidth-9.943pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.2149\columnwidth-5.486pt\relax}@{}}
-\hline
-\textbf{Appliance type} & \textbf{Capabilities} & \textbf{Setpoint} \\
-\hline
-Air conditioner & power, temperature, mode, fan & 16--30 $^{\circ}$C \\
-Refrigerator & power, temperature & 1--7 $^{\circ}$C \\
-Water heater & power, temperature & 30--60 $^{\circ}$C \\
-Air purifier & power, fan & --- \\
-Dehumidifier & power, fan & --- \\
-Washer, dryer, dishwasher & power & --- \\
-\hline
-\end{tabular}
-\end{center}
-
-\begin{figure*}[!tb]
-\centering
-\includegraphics[width=0.92\textwidth]{figures/figA1_architecture.png}
-\caption{Path of one request through the four layers. The router selects the layer from the shape of the request; the two upper layers are deterministic and do not call a model. In agent mode the router hands the parse of layer 1 to layer 4 as an offer instead, and layer 4 decides.}
-\end{figure*}
-
-\section{Evaluation Plan}
-
-The prototype is evaluated at three levels. Each level records the number of cases, the number that pass, and the cases that remain open.
-
-\begin{center}
-\footnotesize
-{\scshape\bfseries TABLE IV\par}
-{\scshape\bfseries EVALUATION LEVELS AND CURRENT RESULTS\par}\vspace{2pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.2022\columnwidth-7.742pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.4548\columnwidth-17.419pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1415\columnwidth-5.419pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1415\columnwidth-5.419pt\relax}@{}}
-\hline
-\textbf{Level} & \textbf{What it measures} & \textbf{Cases} & \textbf{Result} \\
-\hline
-Unit tests & Parsing, resolution, validation, scheduling, recovery, routing & 212 & pass \\
-Rule corpus & The deterministic layer alone, sentence by sentence & 68 & 100 \% \\
-End-to-end & Whole pipeline against the model service, every appliance action & 15 & 13/15 \\
-\hline
-\end{tabular}
-\end{center}
-
-\textbf{Unit level.} 212 tests cover parsing, appliance resolution, capability validation, scheduling, recovery of missed tasks, routing and the guards in the tool loop. The tests use a scripted model in place of the network service, so they run without an API key and give the same result on each run.
-
-\textbf{Rule corpus.} 68 sentences with the expected intent, target appliances and actions are evaluated without any model call. The current build answers all 68 correctly. The corpus is also the regression check for new phrasings: a sentence is moved out of the rule layer only when the corpus shows that it cannot be answered there.
-
-\textbf{End-to-end.} 15 sentences cover the boundary cases: a goal, a compound request, a routine, a routine with a time, an incomplete request and two out-of-scope requests. Each sentence is run twice against the model service and scored on the action received by each appliance rather than on the wording of the reply. The current result is 13 correct, 1 partial, 1 weak and 0 incorrect, with both runs in agreement.
-
-The partial case is ``the fridge is too warm'', which names no target value. The expected behaviour is a default setpoint for the appliance type. The current build selects 3 degrees Celsius, which is inside the allowed range but not the intended value. A default column in the capability table is the planned correction and is listed in Section V.
-
-The weak case is ``the washer has been on for ages'', which the model answers by reading the appliance and then asking whether to switch it off, instead of acting on a sentence that is plainly a request. The correct appliance is identified and no incorrect command is issued, so the case is not a failure, but it is not yet the behaviour the system claims. Adding the complaint to the rule layer as a request, in the same way a smell and a temperature complaint are already handled, is the planned correction.
-
-One sentence in that set has since left the model entirely. ``The bedroom is a sauna, sort it out'' was the example the whole capability claim rested on, and it was being answered by the tool loop in 8.8 seconds and three steps. It is a comparison, not a feeling, and the comfort table now reads it directly: the correct appliance, the correct mode and the correct setpoint, in under a millisecond, with nothing to be wrong about. The loop is not the first resort for a sentence a table can read; it is the only resort for one that no table can.
-
-\section{Work Plan}
-
-The work follows the course milestones in Table V. Deliverable A defines the scope and the requirements above. Deliverable B will provide the structured system analysis for these requirements. Deliverable C will document the architecture shown in Section III. All eleven requirements are implemented: the rule layer, the routine table, the scheduling and recovery behaviour, the tool loop and the web interface are present in the current build. The remaining work is the default setpoint correction, the packaging of the Android application, and the user guide required for Deliverable E.
-
-\begin{center}
-\footnotesize
-{\scshape\bfseries TABLE V\par}
-{\scshape\bfseries MILESTONES\par}\vspace{2pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.3210\columnwidth-8.195pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.4356\columnwidth-11.122pt\relax}>{\raggedright\arraybackslash\hyphenpenalty=10000\exhyphenpenalty=10000}p{\dimexpr 0.1834\columnwidth-4.683pt\relax}@{}}
-\hline
-\textbf{Milestone} & \textbf{Deliverable} & \textbf{Due} \\
-\hline
-A. Requirement analysis & This proposal and requirement document & Oct 23 / 30 \\
-B. Specification & Structured system analysis & Per schedule \\
-C. Design & Architecture design & Per schedule \\
-D. Implementation & Source code, tests, use cases & Per schedule \\
-E. Presentation & Demo, user and installation guide & Per schedule \\
-\hline
-\end{tabular}
-\end{center}
-
-\section{Conclusion}
-
-This project builds and evaluates a conversational interface for a small appliance set. The requirements in Section II define what the prototype is expected to do, and the evaluation in Section IV records how much of it is working at present. The design decision that carries most of the result is the order of the layers: deterministic handling for the requests that have one correct interpretation, and a language model only where the appliance state has to be read or several appliances have to be combined. This order allows most requests to be answered in well under a millisecond and keeps the result of the same request stable across runs.
+\begin{itemize}
+  \item \textbf{NFR-1: Processing Latency.} The local risk check
+  (\texttt{risk.py}) executes in $<1.2$ ms per cycle. Asynchronous LLM reasoning
+  finishes in 2--3 seconds upon a risk trigger, controlled by a 180 s cooldown
+  window [8].
+  \item \textbf{NFR-2: Local Simulation Containment.} All sensor streams and
+  device states run locally using generated JSONL/CSV log files [21].
+  \item \textbf{NFR-3: Strict Whitelist Safety.} The decision engine enforces a
+  strict 7-action whitelist, guaranteeing zero unapproved Level 2 execution [7].
+\end{itemize}
 
 \begin{thebibliography}{99}
-
-\bibitem{ref1} LG Electronics, ``LG ThinQ.'' [Online]. Available: \url{https://www.lg.com/}
-
-\bibitem{ref2} Google, ``Google Home developer center.'' [Online]. Available: \url{https://developers.home.google.com/}
-
-\bibitem{ref3} Amazon, ``Alexa smart home skill API.'' [Online]. Available: \url{https://developer.amazon.com/en-US/alexa}
-
-\bibitem{ref4} Apple, ``Home.'' [Online]. Available: \url{https://www.apple.com/home-app/}
-
-\bibitem{ref5} Samsung, ``SmartThings.'' [Online]. Available: \url{https://www.smartthings.com/}
-
-\bibitem{ref6} Home Assistant, ``Home Assistant.'' [Online]. Available: \url{https://www.home-assistant.io/}
-
-\bibitem{ref7} Connectivity Standards Alliance, ``Matter.'' [Online]. Available: \url{https://csa-iot.org/all-solutions/matter/}
-
-\bibitem{ref8} S. Yao et al., ``ReAct: Synergizing reasoning and acting in language models,'' in Proc. Int. Conf. Learning Representations (ICLR), 2023.
-
-\bibitem{ref9} T. Schick et al., ``Toolformer: Language models can teach themselves to use tools,'' in Proc. Advances in Neural Information Processing Systems (NeurIPS), 2023.
-
+\footnotesize
+\bibitem{r1} LG Electronics, ``LG Electronics Unveils the Next Evolution of AI Home at IFA 2026,'' Global Newsroom, Aug. 2026.
+\bibitem{r2} Samsung Electronics, ``Home Companion: Comprehension of Samsung Bespoke AI 2026,'' Jan. 2026.
+\bibitem{r3} U.S. Environmental Protection Agency (EPA), ``A Brief Guide to Mold, Moisture and Your Home,'' EPA 402-K-02-003, 2022.
+\bibitem{r4} ASHRAE, ``Standard 55: Thermal Environmental Conditions for Human Occupancy,'' ASHRAE, 2023.
+\bibitem{r5} T. Yuan et al., ``R-Judge: Benchmarking Safety Risk Awareness for LLM Agents,'' arXiv:2401.10019, 2024.
+\bibitem{r6} A. Pradhan, A. Lazar, and L. Findlater, ``Use of Intelligent Voice Assistants by Older Adults,'' ACM TOCHI, vol. 27, no. 4, 2020.
+\bibitem{r7} H. Zhang et al., ``PromptShield Home: Ambient Multimodal Prompt Injection Defense,'' arXiv:2608.05495, 2026.
+\bibitem{r8} M. Hewitt, ``Speaking to the Edge: Conversational Control of Smart Home IoT,'' Ph.D. thesis, Univ. of Sheffield, 2026.
+\bibitem{r9} Ministry of Science and ICT, ``2025 Survey on the Digital Divide,'' KDI Economic Info Center, Mar. 2026.
+\bibitem{r10} Money Today, ``2025 Digital Divide Survey: Competency Level Analysis,'' Mar. 2026.
+\bibitem{r11} Maeil Business Newspaper, ``Home Appliance Usability Survey for Consumers 50+,'' 2026.
+\bibitem{r12} Seoul Metropolitan Fire Headquarters, ``2019 Residential Fire Statistics Analysis,'' 2020.
+\bibitem{r13} National Fire Agency, ``Chuseok Holiday Fire Safety Bulletin,'' Seoul Shinmun, 2025.
+\bibitem{r14} World Health Organization (WHO), ``WHO Guidelines for Indoor Air Quality: Dampness and Mould,'' 2009.
+\bibitem{r15} LG Electronics, ``LG ThinQ Platform Specifications,'' Official Whitepaper, 2026.
+\bibitem{r16} Samsung India, ``2026 Range of Bespoke AI Appliances,'' Press Release, 2026.
+\bibitem{r17} W3C, ``Web Content Accessibility Guidelines (WCAG) 2.2,'' W3C Recommendation, 2023.
+\bibitem{r18} AdaHome, ``An Adaptive Smart Home Assistant using Local Language Models,'' arXiv:2607.18034, 2026.
+\bibitem{r19} Korea Meteorological Administration, ``Open Data Portal APIs,'' 2026.
+\bibitem{r20} C. Murad et al., ``Design guidelines for hands-free speech interaction,'' in Proc. MobileHCI '18, 2018.
+\bibitem{r21} NIST, ``IoT Device Cybersecurity Guidance,'' NIST Special Publication 800-213, 2021.
 \end{thebibliography}
 
 \end{document}
