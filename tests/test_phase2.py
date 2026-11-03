@@ -292,6 +292,31 @@ class ApprovalTest(Base):
         self.assertIsNone(q.confirm(ap.id))
         self.assertEqual(ap.status, "expired")
 
+    def test_a_late_answer_is_reported_as_an_expiry(self):
+        """Not as "no such approval".
+
+        A bare None from `confirm()` reads as "that id does not exist", and the
+        caller then treats the risk as unanswered: no quiet period, and the
+        question comes back on the next tick. The late answer is an expiry, so
+        the queue has to hand it over once and forget it.
+        """
+        q = ApprovalQueue()
+        ap = q.propose(risk_kind="thermal", question="q", summary="s",
+                       actions=[{"device_id": "dryer"}], ttl_seconds=0.2)
+        time.sleep(0.3)
+        self.assertIsNone(q.confirm(ap.id))
+        late = q.take_late_expiry(ap.id)
+        self.assertIsNotNone(late)
+        self.assertEqual(late.risk_kind, "thermal")
+        self.assertIsNone(q.take_late_expiry(ap.id))  # pop-on-read
+
+    def test_an_on_time_yes_is_not_reported_as_late(self):
+        q = ApprovalQueue()
+        ap = q.propose(risk_kind="thermal", question="q", summary="s",
+                       actions=[{"device_id": "dryer"}], ttl_seconds=300)
+        self.assertIsNotNone(q.confirm(ap.id))
+        self.assertIsNone(q.take_late_expiry(ap.id))
+
 
 # ---------------------------------------------------------------- engine, no LLM
 

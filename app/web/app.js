@@ -354,8 +354,13 @@ async function answer(yes) {
   if (askBusy || !askId) return;
   askBusy = true;
   try {
-    await api(`/api/approvals/${askId}/${yes ? "confirm" : "decline"}`, { method: "POST" });
-    toast(yes ? "Done." : "Nothing changed.");
+    const res = await api(`/api/approvals/${askId}/${yes ? "confirm" : "decline"}`, { method: "POST" });
+    // The house reports `expired` when the deadline passed while the answer
+    // was in flight. Saying "Done." there would be a lie about the devices,
+    // and this is the one screen where a lie matters.
+    if (res && res.expired) toast("Too late — nothing was changed.");
+    else if (res && res.ok === false) toast("That request had already closed.");
+    else toast(yes ? "Done." : "Nothing changed.");
     await refresh();
     loadMessages().catch(() => {});
   } catch (err) {

@@ -46,6 +46,11 @@ class ApprovalQueue:
         self.ttl_seconds = ttl_seconds
         self._lock = threading.RLock()
         self._items: dict[str, Approval] = {}
+        # Answers that arrived after the deadline. Kept so the caller can react
+        # the way it reacts to a sweep expiry -- silence the risk, tell the
+        # user nothing changed. A bare None would be read as "no such
+        # approval", and the risk would be asked about again on the next tick.
+        self._late: dict[str, Approval] = {}
 
     # ---------------------------------------------------------------- propose
 
@@ -86,6 +91,7 @@ class ApprovalQueue:
             try:
                 if datetime.fromisoformat(ap.expires_at) <= datetime.now():
                     ap.status = "expired"
+                    self._late[approval_id] = ap
                     db.log("approval.expired",
                            f"{approval_id} {ap.risk_kind}: answered after the "
                            f"window; nothing was changed")
@@ -106,6 +112,15 @@ class ApprovalQueue:
         return ap
 
     # ---------------------------------------------------------------- expire
+
+    def take_late_expiry(self, approval_id: str) -> Approval | None:
+        """Was this id closed by an answer that arrived too late?
+
+        Pop-on-read: the caller asks once, right after a `confirm()` returned
+        None, and acts on it the way it acts on a sweep expiry.
+        """
+        with self._lock:
+            return self._late.pop(approval_id, None)
 
     def expire_due(self, now: datetime | None = None) -> list[Approval]:
         """Close everything past its deadline. Nothing is executed; that is the point."""

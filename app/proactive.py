@@ -397,7 +397,21 @@ class ProactiveEngine:
         """The user said yes. Execute the Tier-2 actions now."""
         ap = self.approvals.confirm(approval_id)
         if not ap:
-            return {"ok": False, "error": "no pending approval with that id"}
+            # Two ways to get here, and they are not the same thing. Either
+            # there is no such approval, or there was one and this answer
+            # arrived after its deadline. The second case is an expiry, so it
+            # has to end like a sweep expiry: nothing changes, the user is
+            # told, and the risk goes quiet instead of being asked again on
+            # the next tick.
+            late = self.approvals.take_late_expiry(approval_id)
+            if late is None:
+                return {"ok": False, "error": "no pending approval with that id"}
+            self._cooldown[late.risk_kind] = time.monotonic() + self.quiet_seconds
+            db.add_message("system",
+                           f"\u23f3 That one closed before I heard back, so I changed "
+                           f"nothing. {_devices(late)} are as they were.",
+                           {"approval": late.to_dict()})
+            return {"ok": False, "expired": True, "approval": late.to_dict()}
         executed = []
         for item in ap.actions:
             res = self.adapter.apply(item["device_id"], item["actions"])
