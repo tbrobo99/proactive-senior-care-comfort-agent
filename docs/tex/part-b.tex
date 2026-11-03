@@ -57,7 +57,7 @@ The current prototype uses simulated sensor data and appliance states. All contr
 
 The backend targets CPython 3.11 and uses no third-party package, so the demonstration runs from a clean interpreter with no install step. Storage is SQLite 3.45 in WAL mode, which needs no server process. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB usable RAM, no discrete GPU; the interface is checked in Edge 156 (Chromium). No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine. Linux and ARM boards (mini PC, Raspberry Pi, OpenWrt router) are planned targets.
 
-\textbf{Planned deployment.} The prototype is currently developed and tested locally. For the final demonstration, we plan to deploy the backend to a cloud host with persistent storage, automatic service restart, secure API-key configuration, HTTPS, and access control. The hosting platform and instance size will be selected after deployment testing. Source and documentation will be placed under version control from the implementation phase, with the LaTeX sources uploaded alongside the code.
+\textbf{Planned deployment.} The prototype is currently developed and tested locally. For the final demonstration, we will evaluate cloud hosting and an existing team computer as deployment options. The final choice will depend on reliability, accessibility, and cost. Either option requires persistent storage for the database, a supervised restart, the API key kept out of the repository, HTTPS, and access control in front of the API. Source and documentation will be placed under version control from the implementation phase, with the LaTeX sources uploaded alongside the code.
 
 \subsection{Software and algorithms}
 
@@ -69,11 +69,11 @@ The backend targets CPython 3.11 and uses no third-party package, so the demonst
 
 \subsection{Cost}
 
-The prototype uses existing hardware and no paid software licence, so the incremental cost of hardware and licensed software is \textbf{₩0}. Model calls are the only variable item; GLM-4-Flash is listed by the provider as a free API, so a demonstration run adds no API cost, and a paid tier would bill per token. Hosting is the remaining item: an initial budget of about \textbf{US\$6 per month} can be taken from the published price of a DigitalOcean Basic Droplet (1 vCPU, 1 GiB RAM, 25 GiB SSD), as a reference configuration rather than a chosen one. The final demonstration will compare a cloud host with an existing team computer on reliability, access and cost; the platform and price will be confirmed after testing candidate instances.
+The prototype uses existing hardware and requires no paid software licences, giving an estimated additional hardware and software purchase cost of \textbf{₩0}. Any model API or hosting charges will depend on the configuration selected for the final demonstration.
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C. The demonstration exercises two scenarios: a washer left sealed after its cycle, where the humidity index fires and ventilation runs without asking, and a cooktop in use, where the thermal index fires and ventilation or pre-cooling is offered for approval.
+Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C. The demonstration covers two scenarios: persistent moisture in a closed washer triggers automatic ventilation; kitchen heat and appliance load trigger automatic exhaust or pre-cooling, while dryer rescheduling or cooktop preheating requires approval.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
@@ -104,7 +104,7 @@ An action's level comes from one table in the policy module, and a kind not in i
 {\footnotesize\scshape The proposed whitelist.\par}
 \vspace{2pt}
 \footnotesize
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.5120\columnwidth-6.536pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4280\columnwidth-5.464pt\relax}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.4953\columnwidth-6.323pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4447\columnwidth-5.677pt\relax}@{}}
 \hline
 \textbf{Action} & \textbf{Device} \\
 \hline
@@ -113,7 +113,7 @@ L1 \texttt{dehumidifier\_on} & Balcony dehumidifier \\
 L1 \texttt{purifier\_on} & Living-room purifier \\
 L1 \texttt{ventilate\_kitchen} & Range hood, fan high \\
 L1 \texttt{precool\_kitchen} & Kitchen AC to 24 $^{\circ}$C \\
-L2 \texttt{delay\_dryer} & Dryer off, restart at 23:00 \\
+L2 \texttt{delay\_dryer} & Dryer off, restart next 23:00 \\
 L2 \texttt{preheat\_cooktop} & Cooktop on early \\
 \hline
 \end{tabular}
@@ -152,7 +152,7 @@ FUNCTION intervene(r, snap):
         approval.propose(ask, ttl=300)
 \end{lstlisting}
 
-\texttt{decide()} returns the rule candidates when the model is disabled, times out or returns unusable JSON, and an explicit empty list is a decision: no Level 1 action runs. The latency budget splits in two: 30 ms for the deterministic tick and 2 to 3 s for a decision that calls the model. Two hundred timed ticks across both scenarios, with no model call and including the per-tick log append and CSV rewrite, gave a median of 15 ms for the first; the second is dominated by the provider round trip.
+\texttt{decide()} returns the rule candidates when the model is disabled, times out or returns unusable JSON, and an explicit empty list is a decision: no Level 1 action runs. The latency budget is 30 ms for the deterministic tick and 2 to 3 s for a decision that calls the model, the second dominated by the provider round trip. Both are targets to be verified under test.
 
 \clearpage
 
