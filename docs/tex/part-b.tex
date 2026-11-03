@@ -116,7 +116,17 @@ Each requirement below is stated in Deliverable A and realised by the mechanism 
 
 \subsection{FR-2: predictive risk, MRI and TOI}
 
-\texttt{risk.evaluate()} returns every risk that currently applies, highest first. Both indices are 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed, and rises with drum humidity above 70 \%, with hours sealed, and with balcony temperature above 24 $^{\circ}$C. TOI applies while a heat source is on or within 30 minutes of a scheduled cooking session, and rises with heat load, with kitchen temperature above 27 $^{\circ}$C, and with fridge compressor duty above 60 \%; a scheduled session adds a fixed term.
+\texttt{risk.evaluate()} returns every risk that currently applies, highest first. Both indices are 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed; TOI applies while a heat source is on or a cooking session starts within 30 minutes. The weights are these, and they can be read in \texttt{app/risk.py}:
+
+{\small\setlength{\abovedisplayskip}{2pt}\setlength{\belowdisplayskip}{2pt}\setlength{\abovedisplayshortskip}{1pt}\setlength{\belowdisplayshortskip}{1pt}
+\[MRI = \mathrm{clamp}[3.2(h-70) + 6s + 1.5\max(0,T_b-24)]\]
+}
+
+{\small\setlength{\abovedisplayskip}{2pt}\setlength{\belowdisplayskip}{2pt}\setlength{\abovedisplayshortskip}{1pt}\setlength{\belowdisplayshortskip}{1pt}
+\[TOI = \mathrm{clamp}[W/25{+}6\max(0,T_k{-}27){+}60\max(0,D{-}0.6){+}15B]\]
+}
+
+where h is drum humidity in \%, s hours sealed, W heat load in W, D fridge duty cycle, T\_b balcony temperature, T\_k kitchen temperature, and B is 1 when a session starts inside the window. Two limits are worth stating: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type --- any entry inside the window counts.
 
 \textbf{On provenance:} the coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined}, chosen so that each term is legible and each can be defended on its own. They are not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The external literature explains \emph{why} trapped moisture and compressor duty matter; the numbers are ours, and they are the first thing we expect to recalibrate once the simulator has produced real traces.
 
@@ -126,7 +136,7 @@ An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kin
 
 \begin{table}[tbp]
 \centering
-\caption{The whitelist as implemented. Deliverable A names these in prose; the identifiers are the ones in \texttt{policy.ACTION\_TIERS}.}
+\caption{The whitelist, as implemented.}
 \label{tab:II}
 \footnotesize
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.5120\columnwidth-6.536pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4280\columnwidth-5.464pt\relax}@{}}
