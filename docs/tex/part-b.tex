@@ -73,7 +73,7 @@ The prototype uses existing hardware and requires no paid software licences, giv
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C. The demonstration covers two scenarios: persistent moisture in a closed washer triggers automatic ventilation; kitchen heat and appliance load trigger automatic exhaust or pre-cooling, while dryer rescheduling or cooktop preheating requires approval.
+Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C. The demonstration covers two scenarios: persistent moisture in a closed washer triggers automatic ventilation; kitchen heat and appliance load trigger automatic exhaust or pre-cooling, while turning the dryer off or preheating the cooktop requires approval.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
@@ -97,14 +97,14 @@ where clamp[x] = min(100, max(0, x)); h is drum humidity in \%, s hours since th
 
 \subsection{FR-3: the two-level framework}
 
-An action's level comes from one table in the policy module, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. Deliverable A and the background research describe Level 1 as acting inside a range the household has already allowed; in this design that range is the whitelist and its parameters, not a per-user setting. No component downstream of the table can introduce an action.
+An action's level comes from one table in the policy module, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it interrupts a running appliance, moves a schedule, or puts heat where nobody is standing. Deliverable A and the background research describe Level 1 as acting inside a range the household has already allowed; in this design that range is the whitelist and its parameters, not a per-user setting. No component downstream of the table can introduce an action.
 
 \begin{center}
 {\scshape\bfseries TABLE I\par}
 {\footnotesize\scshape The proposed whitelist.\par}
 \vspace{2pt}
 \footnotesize
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.4953\columnwidth-6.323pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4447\columnwidth-5.677pt\relax}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.5208\columnwidth-6.648pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4192\columnwidth-5.352pt\relax}@{}}
 \hline
 \textbf{Action} & \textbf{Device} \\
 \hline
@@ -113,7 +113,7 @@ L1 \texttt{dehumidifier\_on} & Balcony dehumidifier \\
 L1 \texttt{purifier\_on} & Living-room purifier \\
 L1 \texttt{ventilate\_kitchen} & Range hood, fan high \\
 L1 \texttt{precool\_kitchen} & Kitchen AC to 24 $^{\circ}$C \\
-L2 \texttt{delay\_dryer} & Dryer off, restart next 23:00 \\
+L2 \texttt{delay\_dryer} & Dryer off; restart by hand \\
 L2 \texttt{preheat\_cooktop} & Cooktop on early \\
 \hline
 \end{tabular}
