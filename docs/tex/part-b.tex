@@ -53,7 +53,7 @@ This draft outlines the development environment and implementation details for S
 
 \subsection{Platform and language}
 
-FSD-Home consists of a Python backend and a browser-based frontend. The backend is a single Python process that runs three parts: a sensor layer supplying appliance state, a proactive engine that evaluates it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving a JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. The split keeps deployment small --- one process, one port, no frontend build step and no separate database server.
+The current prototype uses simulated sensor data and appliance states. All control actions are applied to virtual devices; no physical LG appliances are connected. FSD-Home consists of a Python backend and a browser-based frontend. The backend is a single Python process that runs three parts: a sensor layer supplying appliance state, a proactive engine that evaluates it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving a JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. The split keeps deployment small --- one process, one port, no frontend build step and no separate database server.
 
 The backend targets CPython 3.11 and uses no third-party package, so the demonstration runs from a clean interpreter with no install step. Storage is SQLite 3.45 in WAL mode, which needs no server process. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB RAM, no GPU; the interface is checked in Edge 156 (Chromium). No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine, so the demonstration configuration requires network connectivity. The same code runs on Linux and on ARM (mini PC, Raspberry Pi, OpenWrt router).
 
@@ -63,17 +63,17 @@ The backend targets CPython 3.11 and uses no third-party package, so the demonst
 
 \textbf{A rule-first language stack.} The language layer parses a fixed set of sentence patterns deterministically and sends only what it cannot parse to a model through an OpenAI-compatible endpoint. Two arrangements share the same guardrails. In \texttt{cascade} mode the model is consulted only after a parse failure; in \texttt{agent} mode the interpretation produced by the rules is offered to a bounded tool loop, and the model either accepts it or generates a plan through that loop. The demonstration uses \texttt{agent} mode with GLM-4-Flash. A timeout, malformed JSON or an unknown device falls back to the rules in either case.
 
-\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model selects which candidates to execute and in what order, and cannot introduce an action outside the whitelist. Action levels come from a table in the specification, not from model output, so whether a Level 2 action is put to the user is decided by that table. In a trial, given a cooktop candidate the model omitted it in 15 of 15 runs; if that judgement were decisive, a scheduled cooking session would be ignored.
+\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model selects which candidates to execute and in what order, and cannot introduce an action outside the whitelist. Action levels come from a table in the specification, not from model output, so whether a Level 2 action is put to the user is decided by that table rather than by the model's judgement.
 
-\textbf{Persistence.} SQLite in WAL mode, three tables: scheduled jobs, the conversation, and an audit log of decisions. Pending approvals are held in memory and discarded on restart, so a restart executes nothing that was waiting. A simulator supplies appliance state by default; a ThinQ adapter can replace it behind the same device interface.
+\textbf{Persistence.} SQLite in WAL mode, three tables: scheduled jobs, the conversation, and an audit log of decisions. Pending approvals are held in memory and discarded on restart, so a restart executes nothing that was waiting. A simulator supplies appliance state; integration with real LG appliances through ThinQ is a possible future extension and requires separate compatibility and access testing.
 
 \subsection{Cost}
 
-The prototype uses existing hardware and requires no paid software licences. GLM-4-Flash is used for model-assisted decisions; API costs will be confirmed against the provider's pricing. Cloud deployment is planned for the final demonstration, with hosting costs estimated after selecting and testing a suitable instance.
+The prototype uses existing hardware and requires no paid software licence, so the incremental purchase cost of the local system is \textbf{₩0}. Model calls are the only variable item: the demonstration uses GLM-4-Flash, which the provider lists as a free API in its model documentation, so a demonstration run adds no API cost; a paid tier would be billed per token. Cloud hosting is the one item to budget --- one small instance is sufficient, and the cheapest general-purpose plan at a public provider (1 vCPU, 1 GiB RAM, 25 GiB SSD at DigitalOcean) is listed at \textbf{\$6 per month} in the provider's published droplet pricing. The final figure follows the platform choice.
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
+Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
@@ -150,7 +150,7 @@ FUNCTION intervene(r, snap):
         approval.propose(ask, ttl=300)
 \end{lstlisting}
 
-NFR-1 budgets 2 to 3 s for a decision that calls the model, which is dominated by the provider round trip; the deterministic check is arithmetic over one snapshot and does not approach that budget.
+The latency budget splits in two: 30 ms for the deterministic tick and 2 to 3 s for a decision that calls the model. Two hundred timed ticks on the development machine gave a median of 15 ms for the first; the second is dominated by the provider round trip.
 
 \clearpage
 
