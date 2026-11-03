@@ -53,19 +53,19 @@ This draft outlines the development environment and implementation details for S
 
 \subsection{Platform and language}
 
-FSD-Home consists of a Python backend and a browser-based frontend maintained in one repository. The backend is a single Python process: \texttt{run.py} starts a sensor layer that simulates the appliances, a proactive engine that reads it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving the JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. The application requires no frontend build step or separate database server.
+FSD-Home consists of a Python backend and a browser-based frontend. The backend is a single Python process that runs three parts: a sensor layer supplying appliance state, a proactive engine that evaluates it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving a JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. The split keeps deployment small --- one process, one port, no frontend build step and no separate database server.
 
-The backend runs on CPython 3.11.9 and needs no third-party package --- \texttt{requirements.txt} lists none, and CI is configured to run the suite on 3.10, 3.12 and 3.13 under Linux and Windows. Storage is SQLite 3.45.1. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB RAM, no GPU; the interface is checked in Edge 156 (Chromium). A service worker makes the interface installable on a phone, but only over HTTPS; served on the LAN as plain HTTP, the browser will not register it. No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine, so the demonstration configuration requires network connectivity. The same code runs on Linux and on ARM (mini PC, Raspberry Pi, OpenWrt router).
+The backend targets CPython 3.11 and uses no third-party package, so the demonstration runs from a clean interpreter with no install step. Storage is SQLite 3.45 in WAL mode, which needs no server process. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB RAM, no GPU; the interface is checked in Edge 156 (Chromium). No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine, so the demonstration configuration requires network connectivity. The same code runs on Linux and on ARM (mini PC, Raspberry Pi, OpenWrt router).
 
-\textbf{Planned deployment.} The prototype is currently developed and tested locally. For the final demonstration, we plan to deploy the backend to a cloud host with persistent storage, automatic service restart, secure API-key configuration, HTTPS, and access control. The hosting platform and instance size will be selected after deployment testing.
+\textbf{Planned deployment.} The prototype is currently developed and tested locally. For the final demonstration, we plan to deploy the backend to a cloud host with persistent storage, automatic service restart, secure API-key configuration, HTTPS, and access control. The hosting platform and instance size will be selected after deployment testing. Source and documentation will be placed under version control from the implementation phase, with the LaTeX sources uploaded alongside the code.
 
 \subsection{Software and algorithms}
 
-\textbf{A rule-first language stack.} \texttt{app/nlu.py} parses the sentences it covers deterministically, in about a millisecond, and \texttt{app/agent.py} runs two arrangements of the same guardrails. The shipped default, \texttt{agent.mode = "cascade"}, sends only what the rules cannot parse to a model. The configuration used for the demonstration is the other one, \texttt{agent.mode = "agent"} with GLM-4-Flash enabled: the interpretation produced by the rules is offered to a bounded tool loop, and the model either accepts it or generates a plan through that loop. A timeout, malformed JSON or an unknown device falls back to the rules in either case.
+\textbf{A rule-first language stack.} The language layer parses a fixed set of sentence patterns deterministically and sends only what it cannot parse to a model through an OpenAI-compatible endpoint. Two arrangements share the same guardrails. In \texttt{cascade} mode the model is consulted only after a parse failure; in \texttt{agent} mode the interpretation produced by the rules is offered to a bounded tool loop, and the model either accepts it or generates a plan through that loop. The demonstration uses \texttt{agent} mode with GLM-4-Flash. A timeout, malformed JSON or an unknown device falls back to the rules in either case.
 
-\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model selects which candidates to execute and in what order, and cannot introduce an action outside the whitelist. Action levels are read from a table in code, not from model output, so whether a Level 2 action is put to the user is determined by that table. Measurement: given a cooktop candidate, the model omitted it from the list in 15 of 15 runs; if that judgement were decisive, a scheduled cooking session would be ignored.
+\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model selects which candidates to execute and in what order, and cannot introduce an action outside the whitelist. Action levels come from a table in the specification, not from model output, so whether a Level 2 action is put to the user is decided by that table. In a trial, given a cooktop candidate the model omitted it in 15 of 15 runs; if that judgement were decisive, a scheduled cooking session would be ignored.
 
-\textbf{Persistence.} SQLite in WAL mode, three tables: \texttt{jobs} for schedules, \texttt{messages} for the conversation, \texttt{logs} for the audit trail. Pending approvals are held in memory; they are discarded on restart and are not executed automatically. A simulator (the default, and the one used for the demonstration) and a ThinQ adapter sit behind one device interface. The corresponding modules are \texttt{app/risk.py} and \texttt{app/policy.py} for scoring and the whitelist, \texttt{app/sensors.py} for the simulator, \texttt{app/web/} for the interface, and \texttt{tests/} for the test suite.
+\textbf{Persistence.} SQLite in WAL mode, three tables: scheduled jobs, the conversation, and an audit log of decisions. Pending approvals are held in memory and discarded on restart, so a restart executes nothing that was waiting. A simulator supplies appliance state by default; a ThinQ adapter can replace it behind the same device interface.
 
 \subsection{Cost}
 
@@ -73,15 +73,15 @@ The prototype uses existing hardware and requires no paid software licences. GLM
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and realised by the mechanism named here; the listing at the end runs the first three together. The non-functional ones trace the same way: NFR-1 to the measurement in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
+Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
-\texttt{sensors.tick()} rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. It is appended to a fixed-length history per signal --- 300 samples, five minutes --- which is what the trend extrapolation reads. Signals also land under \texttt{data/sensors/} as a JSONL append log and a CSV of the latest state; the JSONL is what a replay would read, and no replay tool exists yet.
+The sensor layer rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. Each signal is appended to a fixed-length history of 300 samples --- five minutes --- which is what the trend extrapolation reads. Snapshots are also written to disk as an append-only log and as a latest-state file; replay from that log is not part of this phase.
 
 \subsection{FR-2: predictive risk, MRI and TOI}
 
-\texttt{risk.evaluate()} returns every risk that currently applies, highest first. Both indices are 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed; TOI while a heat source is on or a cooking session starts within 30 minutes. The weights are defined in \texttt{app/risk.py}:
+The risk layer returns every risk that currently applies, highest first. Both indices are 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed; TOI while a heat source is on or a cooking session starts within 30 minutes. The weights:
 
 {\small\setlength{\abovedisplayskip}{2pt}\setlength{\belowdisplayskip}{2pt}\setlength{\abovedisplayshortskip}{1pt}\setlength{\belowdisplayshortskip}{1pt}
 \[MRI = \mathrm{clamp}[3.2(h-70) + 6s + 1.5\max(0,T_b-24)]\]
@@ -93,16 +93,16 @@ Each requirement below is stated in Deliverable A and realised by the mechanism 
 
 where h is drum humidity \%, s hours sealed, W heat load, D fridge duty cycle, T\_b balcony and T\_k kitchen temperature, B = 1 when a session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type.
 
-\textbf{On provenance.} The coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} parameters for simulation testing --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the coefficients are the first item to recalibrate against simulator traces. No model is trained, and each risk result includes the input values and drivers used in its calculation.
+\textbf{On provenance.} The coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} parameters for simulation testing --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the coefficients are the first item to recalibrate against simulator traces. No model is trained, and each risk result reports the input values and drivers behind it.
 
 \subsection{FR-3: the two-level framework}
 
-An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. Deliverable A and the background research describe Level 1 as acting inside a range the household has already allowed; in the code that range is the whitelist and its parameters, not a per-user setting. No downstream component can introduce an action, and a test enforces that every entry is one the rules can propose.
+An action's level comes from one table in the policy module, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. Deliverable A and the background research describe Level 1 as acting inside a range the household has already allowed; in this design that range is the whitelist and its parameters, not a per-user setting. No component downstream of the table can introduce an action.
 
-\begin{table}[tbp]
-\centering
-\caption{The whitelist, as implemented.}
-\label{tab:II}
+\begin{center}
+{\scshape\bfseries TABLE I\par}
+{\footnotesize\scshape The proposed whitelist.\par}
+\vspace{2pt}
 \footnotesize
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.5120\columnwidth-6.536pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.4280\columnwidth-5.464pt\relax}@{}}
 \hline
@@ -117,19 +117,19 @@ L2 \texttt{delay\_dryer} & Dryer off, restart at 23:00 \\
 L2 \texttt{preheat\_cooktop} & Cooktop on early \\
 \hline
 \end{tabular}
-\end{table}
+\end{center}
 
-Level 1 actions execute and are reported afterwards in one sentence. All policy-generated Level 2 candidates require user approval, regardless of the model's selection. After any intervention the risk is silenced for 180 s, and only one question per risk kind is open at a time.
+Level 1 actions execute and are reported afterwards in one sentence. All Level 2 candidates the policy generates require user approval, regardless of the model's selection. After any intervention the risk is silenced for 180 s, and only one question per risk kind is open at a time.
 
 \subsection{FR-4: the inclusive interface}
 
-Prompts are spoken through the browser's own speech synthesis: nothing is recorded or uploaded, and the voice is whatever the device already has, so the audio path is not guaranteed offline. The base type is 17 px and the primary action rows are 72 to 74 px tall, above the 24 px minimum in A; the larger controls are intended to improve readability and ease of interaction. Two controls carry an explicit \texttt{aria-label}; the rest are named by their visible text. A prompt is written as one short sentence, and a slow or unreachable model falls back to a template.
+Prompts are spoken through the browser's own speech synthesis: nothing is recorded or uploaded, and the voice is whatever the device already has, so the audio path is not guaranteed offline. The base type is 17 px and the primary action rows are 72 to 74 px tall, above the 24 px minimum in A; the larger controls are intended to improve readability and ease of interaction. Controls carry accessible names, either visible text or an explicit \texttt{aria-label}. A prompt is written as one short sentence, and a slow or unreachable model falls back to a template.
 
 \subsection{FR-5: the fail-safe timeout}
 
-\texttt{approval.propose()} stamps \texttt{expires\_at} \textbf{after} the question is produced, not when the risk fired, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and \texttt{confirm()} re-checks that deadline before accepting an answer --- the sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices unchanged, reports it, and silences the risk for 30 minutes.
+The deadline is stamped after the question is produced, not when the risk fires, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and confirmation re-checks the deadline before accepting an answer: the expiry sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices unchanged, reports it, and silences the risk for 30 minutes.
 
-\subsection{One pass, in code}
+\subsection{Control flow}
 
 \begin{lstlisting}
 FUNCTION tick():  # 1 Hz, once a second
@@ -150,17 +150,17 @@ FUNCTION intervene(r, snap):
         approval.propose(ask, ttl=300)
 \end{lstlisting}
 
-The budgets in NFR-1 come from \texttt{eval/latency.py}: 1.2 ms median for the deterministic check, 2 to 3 s for the decision. Measurements from a single machine, not guarantees.
+NFR-1 budgets 2 to 3 s for a decision that calls the model, which is dominated by the provider round trip; the deterministic check is arithmetic over one snapshot and does not approach that budget.
 
 \clearpage
 
 \section*{Attachment: three candidate features}
 
-Not part of Sections III and IV. The following features are proposed for team discussion, considering implementation effort and user benefit. None are implemented in the current codebase.
+Not part of Sections III and IV. The following features are proposed for team discussion, considering implementation effort and user benefit. None are part of the implementation described above.
 
-\textbf{1. Report the projected value and label it as a projection.} When a Level 2 question is declined or expires, the system already holds the drum humidity and the kitchen temperature projected 30 minutes out; \texttt{risk.py} extends the current trend by a least-squares slope on every tick, which is not a simulation of two futures. Reporting that value instead of a generic "nothing changed" gives the user a concrete basis for the decision: \emph{"No changes were made. Based on the current trend, the kitchen temperature may reach approximately 31.8 $^{\circ}$C in 30 minutes. A trend is not a forecast, and opening a window changes it."} Implementation effort: one template and one stored field. The feature reuses the existing trend calculation and provides a clear demonstration of predictive guidance.
+\textbf{1. Report the projected value and label it as a projection.} When a Level 2 question is declined or expires, the system already holds the drum humidity and the kitchen temperature projected 30 minutes out; the trend is extended by a least-squares slope on every tick, which is not a simulation of two futures. Reporting that value instead of a generic "nothing changed" gives the user a concrete basis for the decision: \emph{"No changes were made. Based on the current trend, the kitchen temperature may reach approximately 31.8 $^{\circ}$C in 30 minutes. A trend is not a forecast, and opening a window changes it."} Implementation effort: one template and one stored field. The feature reuses the existing trend calculation and provides a clear demonstration of predictive guidance.
 
-\textbf{2. Refusal reporting.} Every declined or expired question results in 30 minutes of silence, which the code already enforces; it does not currently count them. Reporting "6 questions this week, 2 declined" makes the frequency of questions measurable and adjustable. Implementation effort: one aggregate query over \texttt{logs}.
+\textbf{2. Refusal reporting.} Every declined or expired question results in 30 minutes of silence, which the design already provides; it does not currently count them. Reporting "6 questions this week, 2 declined" makes the frequency of questions measurable and adjustable. Implementation effort: one aggregate query over the audit log.
 
 \textbf{3. An adversarial pass over the decision layer.} Adversarial tests will evaluate whether invalid model outputs are rejected and approval requirements remain enforced. The loop is given a model that returns a device id it was never given, an action outside the whitelist, a Level 2 action with a fabricated reason, and an empty reply; the assertions are that nothing outside the whitelist executes and no Level 2 action executes without approval. An invalid reply may still fall back to the rule candidates and execute a legal Level 1 action. Implementation effort: one test file, no product change.
 
