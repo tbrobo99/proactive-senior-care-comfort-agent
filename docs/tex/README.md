@@ -6,7 +6,7 @@ control. These two files are that.
 | File | What it is |
 |---|---|
 | `part-a.tex` | Deliverable A: proposal and requirement document. Two pages, IEEE two-column. |
-| `part-b.tex` | Deliverable B, sections III and IV only: development environment and requirement specifications. Two pages of body plus a half-page attachment. |
+| `part-b.tex` | Deliverable B, sections III and IV only: development environment and requirement specifications. Two pages of body plus a one-page attachment — three pages in total. |
 | `figures/` | the eight figures from an earlier draft of B. **No document here includes them any more** — kept only because that is the sole copy of those drawings. |
 
 Both describe the same system, FSD-Home. A fixes the requirements (FR-1 to

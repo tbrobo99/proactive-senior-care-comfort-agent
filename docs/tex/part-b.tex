@@ -34,19 +34,9 @@
   showstringspaces=false,
 }
 
-\graphicspath{{figures/}}
-
-% Sixteen tables and eight full-width figures in thirteen pages means constant
-% float pressure. These limits let a page hold more float material and less
-% text. The document still ends up with three or four pages that are mostly
-% exhibits, which is normal for a specification this dense; do not fight it.
-\renewcommand{\textfraction}{0.05}
-\renewcommand{\topfraction}{0.9}
-\renewcommand{\bottomfraction}{0.7}
-\renewcommand{\floatpagefraction}{0.7}
-\setcounter{topnumber}{4}
-\setcounter{bottomnumber}{2}
-\setcounter{totalnumber}{6}
+% This file is a slice: sections III and IV only, three pages, one table and no
+% figures. The full specification lives in the report the group assembles; do
+% not pad this back out to the earlier fourteen-page draft.
 
 \begin{document}
 
@@ -69,31 +59,33 @@ This covers sections III and IV of Deliverable B. It describes \textbf{what the 
 
 FSD-Home is two halves in one repository. The backend is a single Python process: \texttt{run.py} starts a sensor layer that simulates the appliances, a proactive engine that reads it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving the JSON API. The interface is plain HTML, CSS and JavaScript, no framework: it shows device state, takes input, and puts approval questions on screen. No build step, no database server.
 
-The backend targets Python 3.10 or newer and needs no third-party package --- \texttt{requirements.txt} lists none, and CI is configured to run the suite on 3.10, 3.12 and 3.13 under Linux and Windows. The interface becomes installable on a phone home screen through a service worker, but only over HTTPS: served on the LAN as plain HTTP, the browser will not register it. Both halves run on Windows, Linux, ARM (mini PC, Raspberry Pi, OpenWrt router) and a small VM, and nothing needs a GPU, a container or a network.
+The backend runs on CPython 3.11.9 and needs no third-party package --- \texttt{requirements.txt} lists none, and CI is configured to run the suite on 3.10, 3.12 and 3.13 under Linux and Windows. Storage is SQLite 3.45.1. Development and the demo run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB RAM, no GPU; the interface is checked in Edge 156 (Chromium). A service worker makes it installable on a phone, but only over HTTPS --- on the LAN as plain HTTP the browser will not register it. Nothing needs a GPU, a container or a network, and the same code runs on Linux and on ARM (mini PC, Raspberry Pi, OpenWrt router).
+
+\textbf{Planned deployment.} Phase 2 runs locally --- \texttt{python run.py --lan}, then \texttt{localhost:8848}; the professor asked for local first and deployment as the next step. The final demo moves the same process to a small cloud VM (one vCPU, 1 GB) so it can be reached without carrying a laptop. Packaging, not a rewrite --- but it also needs a persistent volume for the SQLite file, a supervisor, the API key out of the repository, and HTTPS so the service worker registers. \textbf{None of it is built yet.}
 
 \subsection{Software and algorithms}
 
-\textbf{A rule-first language stack.} \texttt{app/nlu.py} parses the sentences it covers deterministically, in about a millisecond, and \texttt{app/agent.py} runs two arrangements of the same guardrails. The shipped default, \texttt{agent.mode = "cascade"}, sends only what the rules cannot parse to a model through an OpenAI-compatible endpoint. What we demonstrate and measure is the other one: \texttt{agent.mode = "agent"} with GLM-4-Flash enabled, where the rules' own parse is handed to a bounded tool loop as an offer and the model accepts it in one call or plans for itself. A timeout, malformed JSON or an unknown device falls back to the rules in either arrangement.
+\textbf{A rule-first language stack.} \texttt{app/nlu.py} parses the sentences it covers deterministically, in about a millisecond, and \texttt{app/agent.py} runs two arrangements of the same guardrails. The shipped default, \texttt{agent.mode = "cascade"}, sends only what the rules cannot parse to a model. What we demonstrate is the other one: \texttt{agent.mode = "agent"} with GLM-4-Flash enabled, where the rules' own parse is handed to a bounded tool loop as an offer, and the model accepts it in one call or plans for itself. A timeout, malformed JSON or an unknown device falls back to the rules in either case.
 
-\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model chooses which to take and in what order. It cannot introduce an action outside the whitelist, and a level is read from a table in code, not from the model's text. Whether a Level 2 action is \emph{put to the user} is decided by that table --- measured: given a cooktop candidate the model left it off the list 15 times out of 15, and if that judgement decided it, a scheduled cooking session would be silently ignored.
+\textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model chooses which to take and in what order, and cannot introduce an action outside the whitelist. A level is read from a table in code, not from the model's text, so whether a Level 2 action is \emph{put to the user} is the table's decision --- measured: given a cooktop candidate the model left it off the list 15 times out of 15, and if that judgement decided it, a scheduled cooking session would be silently ignored.
 
-\textbf{Persistence.} SQLite in WAL mode, three tables: \texttt{jobs} for durable schedules, \texttt{messages} for the conversation, \texttt{logs} for the audit trail. Pending approvals are held in memory on purpose --- a restart drops them, and dropping them means nothing executes, which is the safe direction to fail in. A simulator (the default, and what the demo uses) and a ThinQ adapter sit behind one device interface.
+\textbf{Persistence.} SQLite in WAL mode, three tables: \texttt{jobs} for schedules, \texttt{messages} for the conversation, \texttt{logs} for the audit trail. Pending approvals are held in memory on purpose --- a restart drops them, and dropping them means nothing executes, which is the safe direction to fail in. A simulator (the default, and what the demo uses) and a ThinQ adapter sit behind one device interface.
 
 \subsection{Cost}
 
-With the simulator and no paid model, running and demonstrating costs nothing: no new hardware and no subscription. \textbf{The configuration we currently run is not that one} --- GLM-4-Flash is enabled, so calls are billed per token, and at demo volume that is cents rather than zero. Hosting is a cost only if the demo must reach outside the campus network; one core and one gigabyte is enough for that. The provider and hosting arrangement for the final demo are not decided yet, so they are candidates, not commitments.
+Everything the demo uses is owned or free: CPython's standard library, SQLite and the browser APIs are unlicensed, and the hardware is the existing machine and the resident's phone. Two items are unsettled. Model calls are the only variable cost --- the provider lists \textbf{GLM-4-Flash-250414} as a free API, while our config names the \texttt{glm-4-flash} alias and we have not verified it resolves to that snapshot, so "free" is the documented tier, not a measured bill. Hosting: one vCPU and 1 GB is enough, but no platform and no price have been chosen. Both remain candidates, not commitments.
 
 \subsection{Division of work}
 
-Tang Bin owns the engine, policy and risk model; Ha Yun Kim the architecture and interface; SooYoung Song the requirements and safety policy; Ruitan Sun the scenarios and usability work. Each area maps to files, so the split is checkable: \texttt{app/risk.py} and \texttt{app/policy.py} hold the scoring and the whitelist, \texttt{app/web/} the interface, \texttt{tests/} the suite, \texttt{app/sensors.py} and \texttt{eval/} the simulator and its measurements.
+Tang Bin owns the engine, policy and risk model; Ha Yun Kim the architecture and interface; SooYoung Song the requirements and safety policy; Ruitan Sun the scenarios and usability work. Each area maps to files, so the split is checkable: \texttt{app/risk.py} and \texttt{app/policy.py} hold the scoring and whitelist, \texttt{app/web/} the interface, \texttt{tests/} the suite, \texttt{app/sensors.py} and \texttt{eval/} the simulator.
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and realised by the mechanism named here. The listing at the end shows the first three running together in one pass.
+Each requirement below is stated in Deliverable A and realised by the mechanism named here; the listing at the end runs the first three together. The non-functional ones trace the same way: NFR-1 to the measurement in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
-\texttt{sensors.tick()} rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. It is appended to a fixed-length history per signal --- 300 samples, five minutes --- which is what the trend extrapolation reads. Signals also land under \texttt{data/sensors/}: a JSONL append log, and a CSV that holds only the latest state. The JSONL is what a replay would read; no replay tool exists yet.
+\texttt{sensors.tick()} rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. It is appended to a fixed-length history per signal --- 300 samples, five minutes --- which is what the trend extrapolation reads. Signals also land under \texttt{data/sensors/} as a JSONL append log and a CSV of the latest state; the JSONL is what a replay would read, and no replay tool exists yet.
 
 \subsection{FR-2: predictive risk, MRI and TOI}
 
@@ -107,13 +99,13 @@ Each requirement below is stated in Deliverable A and realised by the mechanism 
 \[TOI = \mathrm{clamp}[W/25{+}6\max(0,T_k{-}27){+}60\max(0,D{-}0.6){+}15B]\]
 }
 
-where h is drum humidity \%, s hours sealed, W heat load, D fridge duty cycle, T\_b balcony and T\_k kitchen temperature, B = 1 when a session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type --- any entry in the window counts.
+where h is drum humidity \%, s hours sealed, W heat load, D fridge duty cycle, T\_b balcony and T\_k kitchen temperature, B = 1 when a session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type.
 
 \textbf{On provenance:} the coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the numbers are ours, and they are the first thing we will recalibrate against traces from the simulator. Nothing is trained, and every point of a score names the driver that earned it.
 
 \subsection{FR-3: the two-level framework}
 
-An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. What the house may do on its own is fixed by the whitelist and its parameters --- there is no per-user authorisation range in the code, so the table is the whole of the policy. Nothing downstream can invent an action, and a test enforces that every entry is one the rules can actually propose.
+An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. Deliverable A and the background research describe Level 1 as acting inside a range the household has already allowed; in the code that range is the whitelist and its parameters, not a per-user setting. Nothing downstream can invent an action, and a test enforces that every entry is one the rules can actually propose.
 
 \begin{table}[tbp]
 \centering
@@ -139,38 +131,31 @@ Level 1 actions run and are reported afterwards in one sentence. Every Level 2 c
 
 \subsection{FR-4: the inclusive interface}
 
-Prompts are spoken through the browser's own speech synthesis: nothing is recorded or uploaded, and the voice is whatever the device already has, so the audio path is not guaranteed offline. The base type is 17 px and the primary action rows are 72 to 74 px tall, well past the 24 px minimum in A, because these are read at arm's length while standing at a stove. Two controls carry an explicit \texttt{aria-label}; the rest are named by their visible text. A prompt is written to be one short sentence, and a slow or unreachable model leaves it to a template.
+Prompts are spoken through the browser's own speech synthesis: nothing is recorded or uploaded, and the voice is whatever the device already has, so the audio path is not guaranteed offline. The base type is 17 px and the primary action rows are 72 to 74 px tall, well past the 24 px minimum in A --- these are read at arm's length while standing at a stove. Two controls carry an explicit \texttt{aria-label}; the rest are named by their visible text. A prompt is written to be one short sentence, and a slow or unreachable model leaves it to a template.
 
 \subsection{FR-5: the fail-safe timeout}
 
-\texttt{approval.propose()} stamps \texttt{expires\_at} \textbf{after} the question is produced, not when the risk fired, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and \texttt{confirm()} re-checks that deadline before accepting an answer --- the sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices as they were, says so, and silences the risk for 30 minutes. Asking again three minutes later is not respect.
+\texttt{approval.propose()} stamps \texttt{expires\_at} \textbf{after} the question is produced, not when the risk fired, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and \texttt{confirm()} re-checks that deadline before accepting an answer --- the sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices as they were, says so, and silences the risk for 30 minutes.
 
 \subsection{One pass, in code}
 
 \begin{lstlisting}
-FUNCTION tick():      # 1 Hz; offline only
-    snap = sensors.snapshot()
-    sensors.record(snap)  # 300-sample history
-    fired = [r for r in risk.evaluate(snap, hist)
-             if r.score >= 50.0]
-    for r in fired:
-        if cooling(r.kind): continue  # 180 s
-        if pending(r.kind): continue  # one ask
-        intervene(r, snap)  # may call the model
+FUNCTION tick():                # 1 Hz; offline only
+    snap = sensors.snapshot(); sensors.record(snap)
+    for r in [r for r in risk.evaluate(snap, hist)
+              if r.score >= 50.0]:
+        if cooling(r.kind) or pending(r.kind): continue
+        intervene(r, snap)      # may call the model
 
 FUNCTION intervene(r, snap):
-    cands = policy.candidates(r, snap)  # rules
-    if not cands: return
-    chosen = decide(r, cands)  # model: Tier-1
+    cands = policy.candidates(r, snap)   # rules
+    chosen = decide(r, cands)            # model: Tier-1
     run([c for c in chosen if tier_of(c) == 1])
     ask = [c for c in cands if tier_of(c) == 2]
-    if ask: approval.propose(ask, ttl=300)
-
-FUNCTION tier_of(kind):
-    return ACTION_TIERS.get(kind, 2)  # unknown -> safe
+    if ask: approval.propose(ask, ttl=300)  # not the model's to drop
 \end{lstlisting}
 
-The budgets in NFR-1 come from \texttt{eval/latency.py}: the deterministic check --- snapshot, both indices, candidate generation --- ran at 1.2 ms median, and the decision, one model call after a threshold crossing, ran 2 to 3 seconds. Measurements of one machine, not guarantees.
+The budgets in NFR-1 come from \texttt{eval/latency.py}: 1.2 ms median for the deterministic check, 2 to 3 s for the decision. Measurements of one machine, not guarantees.
 
 \clearpage
 
