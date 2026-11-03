@@ -53,15 +53,15 @@ This draft outlines the development environment and implementation details for S
 
 \subsection{Platform and language}
 
-The current prototype uses simulated sensor data and appliance states. All control actions are applied to virtual devices; no physical LG appliances are connected. FSD-Home consists of a Python backend and a browser-based frontend. The backend is a single Python process that runs three parts: a sensor layer supplying appliance state, a proactive engine that evaluates it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving a JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. The split keeps deployment small --- one process, one port, no frontend build step and no separate database server.
+The current prototype uses simulated sensor data and appliance states. All control actions are applied to virtual devices; no physical LG appliances are connected. FSD-Home consists of a Python backend and a browser-based frontend. The backend is a single Python process that runs three parts: a sensor layer supplying appliance state, a proactive engine that evaluates it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving a JSON API. The frontend is plain HTML, CSS and JavaScript with no framework; it displays device state, accepts input, and presents approval questions. There is no frontend build step and no separate database server.
 
-The backend targets CPython 3.11 and uses no third-party package, so the demonstration runs from a clean interpreter with no install step. Storage is SQLite 3.45 in WAL mode, which needs no server process. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB RAM, no GPU; the interface is checked in Edge 156 (Chromium). No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine, so the demonstration configuration requires network connectivity. The same code runs on Linux and on ARM (mini PC, Raspberry Pi, OpenWrt router).
+The backend targets CPython 3.11 and uses no third-party package, so the demonstration runs from a clean interpreter with no install step. Storage is SQLite 3.45 in WAL mode, which needs no server process. Development and the demonstration run on Windows 11 (build 22000), Ryzen 7 5800H, 14 GB usable RAM, no discrete GPU; the interface is checked in Edge 156 (Chromium). No GPU or container is required, and the rules and the simulator run without network access; only the model call leaves the machine. Linux and ARM boards (mini PC, Raspberry Pi, OpenWrt router) are planned targets.
 
 \textbf{Planned deployment.} The prototype is currently developed and tested locally. For the final demonstration, we plan to deploy the backend to a cloud host with persistent storage, automatic service restart, secure API-key configuration, HTTPS, and access control. The hosting platform and instance size will be selected after deployment testing. Source and documentation will be placed under version control from the implementation phase, with the LaTeX sources uploaded alongside the code.
 
 \subsection{Software and algorithms}
 
-\textbf{A rule-first language stack.} The language layer parses a fixed set of sentence patterns deterministically and sends only what it cannot parse to a model through an OpenAI-compatible endpoint. Two arrangements share the same guardrails. In \texttt{cascade} mode the model is consulted only after a parse failure; in \texttt{agent} mode the interpretation produced by the rules is offered to a bounded tool loop, and the model either accepts it or generates a plan through that loop. The demonstration uses \texttt{agent} mode with GLM-4-Flash. A timeout, malformed JSON or an unknown device falls back to the rules in either case.
+\textbf{A rule-first language stack.} Rules and a model are combined. A fixed set of sentence patterns is parsed deterministically, and a model handles what the patterns do not cover, through an OpenAI-compatible endpoint. Two arrangements share the same guardrails: in \texttt{cascade} mode the model is consulted only after a parse failure; in \texttt{agent} mode the interpretation produced by the rules is offered to a bounded tool loop, and the model either accepts it or plans through that loop. The demonstration uses \texttt{agent} mode with GLM-4-Flash. If the model is disabled, times out, returns malformed JSON or names an unknown device, the rules decide.
 
 \textbf{A narrow role for the model in the autonomy loop.} The rules produce the candidates; the model selects which candidates to execute and in what order, and cannot introduce an action outside the whitelist. Action levels come from a table in the specification, not from model output, so whether a Level 2 action is put to the user is decided by that table rather than by the model's judgement.
 
@@ -69,11 +69,11 @@ The backend targets CPython 3.11 and uses no third-party package, so the demonst
 
 \subsection{Cost}
 
-The prototype uses existing hardware and requires no paid software licence, so the incremental purchase cost of the local system is \textbf{₩0}. Model calls are the only variable item: the demonstration uses GLM-4-Flash, which the provider lists as a free API in its model documentation, so a demonstration run adds no API cost; a paid tier would be billed per token. Cloud hosting is the one item to budget --- one small instance is sufficient, and the cheapest general-purpose plan at a public provider (1 vCPU, 1 GiB RAM, 25 GiB SSD at DigitalOcean) is listed at \textbf{\$6 per month} in the provider's published droplet pricing. The final figure follows the platform choice.
+The prototype uses existing hardware and no paid software licence, so the incremental cost of hardware and licensed software is \textbf{₩0}. Model calls are the only variable item; GLM-4-Flash is listed by the provider as a free API, so a demonstration run adds no API cost, and a paid tier would bill per token. Hosting is the remaining item: an initial budget of about \textbf{US\$6 per month} can be taken from the published price of a DigitalOcean Basic Droplet (1 vCPU, 1 GiB RAM, 25 GiB SSD), as a reference configuration rather than a chosen one. The final demonstration will compare a cloud host with an existing team computer on reliability, access and cost; the platform and price will be confirmed after testing candidate instances.
 
 \section{Specifications}
 
-Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C.
+Each requirement below is stated in Deliverable A and addressed by the mechanism described here; the control flow at the end runs the first three together. The non-functional requirements trace the same way: NFR-1 to the latency budget in IV.F, NFR-2 to the local simulator in III.A, NFR-3 to the whitelist in IV.C. The demonstration exercises two scenarios: a washer left sealed after its cycle, where the humidity index fires and ventilation runs without asking, and a cooktop in use, where the thermal index fires and ventilation or pre-cooling is offered for approval.
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
@@ -81,7 +81,7 @@ The sensor layer rebuilds one snapshot per second: room temperature and humidity
 
 \subsection{FR-2: predictive risk, MRI and TOI}
 
-The risk layer returns every risk that currently applies, highest first. Both indices are 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed; TOI while a heat source is on or a cooking session starts within 30 minutes. The weights:
+The risk layer returns every risk that currently applies, highest first. Both indices are clamped to 0--100 and both fire at \textbf{50.0}. MRI applies only to a washer whose cycle has finished with the door closed; TOI while a heat source is on or a cooking session starts within 30 minutes. The weights:
 
 {\small\setlength{\abovedisplayskip}{2pt}\setlength{\belowdisplayskip}{2pt}\setlength{\abovedisplayshortskip}{1pt}\setlength{\belowdisplayshortskip}{1pt}
 \[MRI = \mathrm{clamp}[3.2(h-70) + 6s + 1.5\max(0,T_b-24)]\]
@@ -91,9 +91,9 @@ The risk layer returns every risk that currently applies, highest first. Both in
 \[TOI = \mathrm{clamp}[W/25{+}6\max(0,T_k{-}27){+}60\max(0,D{-}0.6){+}15B]\]
 }
 
-where h is drum humidity \%, s hours sealed, W heat load, D fridge duty cycle, T\_b balcony and T\_k kitchen temperature, B = 1 when a session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type.
+where clamp[x] = min(100, max(0, x)); h is drum humidity in \%, s hours since the cycle ended with the door closed, W the heat load in watts, D the fridge duty cycle as a fraction of the window, T\_b and T\_k balcony and kitchen temperature in $^{\circ}$C, and B = 1 when a cooking session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type.
 
-\textbf{On provenance.} The coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} parameters for simulation testing --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the coefficients are the first item to recalibrate against simulator traces. No model is trained, and each risk result reports the input values and drivers behind it.
+\textbf{On provenance.} The coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} parameters for simulation testing, not taken from EPA or ASHRAE guidance; no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter. No model is trained, and each result reports the inputs and drivers behind it.
 
 \subsection{FR-3: the two-level framework}
 
@@ -123,7 +123,7 @@ Level 1 actions execute and are reported afterwards in one sentence. All Level 2
 
 \subsection{FR-4: the inclusive interface}
 
-Prompts are spoken through the browser's own speech synthesis: nothing is recorded or uploaded, and the voice is whatever the device already has, so the audio path is not guaranteed offline. The base type is 17 px and the primary action rows are 72 to 74 px tall, above the 24 px minimum in A; the larger controls are intended to improve readability and ease of interaction. Controls carry accessible names, either visible text or an explicit \texttt{aria-label}. A prompt is written as one short sentence, and a slow or unreachable model falls back to a template.
+Spoken prompts use the browser's speech synthesis API; the voice is whatever the device already provides, so the audio path is not guaranteed offline. The base type is 17 px, and the primary action rows are at least 72 px tall, above the 24 px minimum in A; the larger controls are intended to improve readability and ease of interaction. Controls carry accessible names, either visible text or an explicit \texttt{aria-label}; a full accessibility audit has not been run. Prompts are kept short and clear, and a slow or unreachable model falls back to a template.
 
 \subsection{FR-5: the fail-safe timeout}
 
@@ -132,12 +132,14 @@ The deadline is stamped after the question is produced, not when the risk fires,
 \subsection{Control flow}
 
 \begin{lstlisting}
-FUNCTION tick():  # 1 Hz, once a second
+FUNCTION tick():  # 1 Hz sampling; decisions may wait
     snap = sensors.snapshot(); sensors.record(snap)
     for r in [r for r in risk.evaluate(snap, hist)
               if r.score >= 50.0]:
         if cooling(r.kind) or pending(r.kind): continue
         intervene(r, snap)  # may call the model
+    for ap in approvals.expire_due():  # deadline
+        quiet(ap.risk_kind, 30 min); report(ap)
 
 FUNCTION intervene(r, snap):
     cands = policy.candidates(r, snap)  # rules
@@ -145,12 +147,12 @@ FUNCTION intervene(r, snap):
     ask = []
     for c in cands:
         if tier_of(c) == TIER2: ask.append(c)
-        elif c in chosen: run(c)
+        elif c in chosen: run(c)        # TIER1 only
     if ask:  # every TIER2 candidate
         approval.propose(ask, ttl=300)
 \end{lstlisting}
 
-The latency budget splits in two: 30 ms for the deterministic tick and 2 to 3 s for a decision that calls the model. Two hundred timed ticks on the development machine gave a median of 15 ms for the first; the second is dominated by the provider round trip.
+\texttt{decide()} returns the rule candidates when the model is disabled, times out or returns unusable JSON, and an explicit empty list is a decision: no Level 1 action runs. The latency budget splits in two: 30 ms for the deterministic tick and 2 to 3 s for a decision that calls the model. Two hundred timed ticks across both scenarios, with no model call and including the per-tick log append and CSV rewrite, gave a median of 15 ms for the first; the second is dominated by the provider round trip.
 
 \clearpage
 
@@ -162,6 +164,6 @@ Not part of Sections III and IV. The following features are proposed for team di
 
 \textbf{2. Refusal reporting.} Every declined or expired question results in 30 minutes of silence, which the design already provides; it does not currently count them. Reporting "6 questions this week, 2 declined" makes the frequency of questions measurable and adjustable. Implementation effort: one aggregate query over the audit log.
 
-\textbf{3. An adversarial pass over the decision layer.} Adversarial tests will evaluate whether invalid model outputs are rejected and approval requirements remain enforced. The loop is given a model that returns a device id it was never given, an action outside the whitelist, a Level 2 action with a fabricated reason, and an empty reply; the assertions are that nothing outside the whitelist executes and no Level 2 action executes without approval. An invalid reply may still fall back to the rule candidates and execute a legal Level 1 action. Implementation effort: one test file, no product change.
+\textbf{3. An adversarial pass over the decision layer.} The existing suite tests the guardrails one at a time; this would add cases where a hostile model output meets them together. The loop is given a model that returns a device id it was never given, an action outside the whitelist, a Level 2 action with a fabricated reason, and an empty reply; the assertions are that nothing outside the whitelist executes and no Level 2 action executes without approval. An invalid reply may still fall back to the rule candidates and execute a legal Level 1 action. Implementation effort: one test file, no product change.
 
 \end{document}
