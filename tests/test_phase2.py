@@ -279,6 +279,19 @@ class ApprovalTest(Base):
         self.assertEqual(ap.status, "expired")
         self.assertIsNone(q.confirm(ap.id))  # too late to say yes
 
+    def test_late_answer_without_a_sweep_still_executes_nothing(self):
+        """The sweep runs on the tick, and a model call can hold the tick up.
+
+        `expire_due()` is deliberately not called here: this is the gap between
+        two sweeps, which is exactly when a late answer used to get through.
+        """
+        q = ApprovalQueue()
+        ap = q.propose(risk_kind="thermal", question="q", summary="s",
+                       actions=[{"device_id": "dryer"}], ttl_seconds=0.2)
+        time.sleep(0.3)
+        self.assertIsNone(q.confirm(ap.id))
+        self.assertEqual(ap.status, "expired")
+
 
 # ---------------------------------------------------------------- engine, no LLM
 

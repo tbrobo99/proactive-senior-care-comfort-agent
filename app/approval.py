@@ -78,6 +78,20 @@ class ApprovalQueue:
             ap = self._items.get(approval_id)
             if not ap or ap.status != "pending":
                 return None
+            # The sweep runs on the tick, and the tick can be held up by a model
+            # call. Without this check a late answer slips through in the gap
+            # between two sweeps and executes past its deadline — which is the
+            # one thing this whole mechanism exists to prevent. Expiring here
+            # instead means the deadline holds no matter when the answer lands.
+            try:
+                if datetime.fromisoformat(ap.expires_at) <= datetime.now():
+                    ap.status = "expired"
+                    db.log("approval.expired",
+                           f"{approval_id} {ap.risk_kind}: answered after the "
+                           f"window; nothing was changed")
+                    return None
+            except ValueError:
+                pass  # no deadline recorded: nothing to enforce
             ap.status, ap.decided_by = "confirmed", "user"
         db.log("approval.confirm", f"{approval_id} {ap.risk_kind}")
         return ap
