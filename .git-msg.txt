@@ -1,0 +1,22 @@
+Stop the dryer, and schedule nothing behind it
+
+An approval was carrying a restart job: say yes to "turn the dryer off
+now" and the dryer came back on at 23:00. That claim cannot be kept.
+23:00 is not known to be cheaper, restoring power does not resume a
+drying cycle (the appliance decides), and an approval given now is not a
+standing permission for a machine that starts itself hours later.
+
+So delay_dryer becomes stop_dryer: the dryer goes off, the user starts it
+again, and the question says so before it is answered.
+
+The expiry message had the same problem in reverse. Tier 1 runs before
+the question is asked, so by the time the question expires the range hood
+is on; "Everything is as it was" was false about a device the user can
+hear running. It now names the devices that were asked about and says
+anything already done stays as it is.
+
+Tests cover the three cases this touches: a confirmation that schedules
+nothing, a confirmation that arrives after the deadline, and an expiry
+that must not claim the house is untouched. 253 pass.
+
+The Part B draft and the specs follow the same wording.

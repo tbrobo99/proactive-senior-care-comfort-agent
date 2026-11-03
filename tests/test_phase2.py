@@ -160,8 +160,11 @@ class PolicyTest(Base):
         r = risk.thermal_risk(snap, e.sensors.history)
         cands = {c.kind: c for c in policy.candidates(r, snap)}
         self.assertEqual(cands["ventilate_kitchen"].tier, policy.TIER1)
-        self.assertEqual(cands["delay_dryer"].tier, policy.TIER2)
-        self.assertIsNotNone(cands["delay_dryer"].job)  # the 23:00 restart job
+        self.assertEqual(cands["stop_dryer"].tier, policy.TIER2)
+        # Stop only. No restart is scheduled behind the user's back: an approval
+        # covers the action it asked about, not the same device starting again
+        # hours later.
+        self.assertIsNone(cands["stop_dryer"].job)
 
     def test_unknown_action_defaults_to_tier2(self):
         self.assertEqual(policy.tier_of("invented_action"), policy.TIER2)
@@ -378,7 +381,7 @@ class ProactiveNoLLMTest(Base):
         self.assertEqual(pending[0].risk_kind, "thermal")
         self.assertTrue(pending[0].question)
 
-    def test_confirmed_approval_executes_and_schedules_restart(self):
+    def test_confirmed_approval_stops_the_dryer_and_schedules_nothing(self):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
@@ -389,9 +392,37 @@ class ProactiveNoLLMTest(Base):
         for dev, acts in self.adapter.applied:
             applied.setdefault(dev, []).extend(a["action"] for a in acts)
         self.assertIn("dryer", applied)  # now it ran
-        jobs = [j for j in db.list_jobs() if j["device_id"] == "dryer"]
-        self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0]["rule"]["type"], "once")
+        # The approval covers the stop. It does not authorise the same device to
+        # start again later, so nothing is queued behind the user's back.
+        self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
+
+    def test_a_late_confirmation_does_not_stop_the_dryer(self):
+        """Past the deadline the answer is late, and nothing executes -- not even
+        the stop the user just approved. No sweep is run first: this is the gap
+        between two sweeps, where a late answer used to get through."""
+        e = self._engine()
+        e.approvals.ttl_seconds = 0.2
+        e.sensors.apply_scenario("oven")
+        e.tick()
+        ap = e.approvals.pending()[0]
+        time.sleep(0.3)
+        res = e.confirm(ap.id)
+        self.assertFalse(res["ok"])
+        self.assertTrue(res.get("expired"))
+        self.assertNotIn("dryer", {dev for dev, _ in self.adapter.applied})
+        self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
+
+    def test_confirming_twice_stops_the_dryer_once(self):
+        e = self._engine()
+        e.sensors.apply_scenario("oven")
+        e.tick()
+        ap = e.approvals.pending()[0]
+        self.assertTrue(e.confirm(ap.id)["ok"])
+        self.assertFalse(e.confirm(ap.id)["ok"])  # already decided
+        stops = [dev for dev, acts in self.adapter.applied
+                 if dev == "dryer"
+                 and any(a["action"] == "power" and a["value"] is False for a in acts)]
+        self.assertEqual(len(stops), 1)
 
     def test_declined_approval_changes_nothing(self):
         e = self._engine()
@@ -402,6 +433,7 @@ class ProactiveNoLLMTest(Base):
         self.assertTrue(e.decline(ap.id)["ok"])
         self.assertEqual(len(self.adapter.applied), before)
         self.assertEqual(e.approvals.pending(), [])
+        self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
 
     def test_expired_approval_changes_nothing(self):
         e = self._engine()
@@ -414,6 +446,24 @@ class ProactiveNoLLMTest(Base):
         self.assertEqual(e.approvals.get(ap.id).status, "expired")
         applied_devs = {dev for dev, _ in self.adapter.applied}
         self.assertNotIn("dryer", applied_devs)
+        self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
+
+    def test_expiry_message_does_not_claim_the_whole_house_is_untouched(self):
+        """Tier 1 runs before the question is asked, so by the time the question
+        expires the range hood is already on. A message saying "everything is as
+        it was" would be false about a device the user can hear running."""
+        e = self._engine()
+        e.approvals.ttl_seconds = 0.2
+        e.sensors.apply_scenario("oven")
+        e.tick()
+        self.assertIn("range_hood", {dev for dev, _ in self.adapter.applied})
+        time.sleep(0.3)
+        e.tick()  # expiry pass
+        text = " ".join(m["content"] for m in db.recent_messages() if m["role"] == "system")
+        self.assertIn("Balcony Dryer", text)
+        self.assertNotIn("Everything is as it was", text)
+        # and the Tier-1 action it did not touch is still in effect
+        self.assertIn("range_hood", {dev for dev, _ in self.adapter.applied})
 
     def test_second_tick_does_not_duplicate_a_pending_ask(self):
         e = self._engine()
@@ -510,7 +560,7 @@ class ProactiveLLMTest(Base):
             pending = e.approvals.pending()
             self.assertEqual(len(pending), 1)
             self.assertEqual({a["kind"] for a in pending[0].actions},
-                             {"delay_dryer", "preheat_cooktop"})
+                             {"stop_dryer", "preheat_cooktop"})
 
     def test_declining_a_question_stops_the_house_asking_again(self):
         """Because the Tier-2 question is no longer the model's to drop, it

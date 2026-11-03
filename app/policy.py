@@ -43,7 +43,7 @@ ACTION_TIERS: dict[str, str] = {
     "purifier_on": TIER1,
     "ventilate_kitchen": TIER1,
     "precool_kitchen": TIER1,
-    "delay_dryer": TIER2,
+    "stop_dryer": TIER2,
     "preheat_cooktop": TIER2,
 }
 
@@ -123,18 +123,20 @@ def candidates(risk, snapshot: dict) -> list[Candidate]:
 
     elif risk.kind == "thermal":
         if ap["dryer"].get("power"):
+            # Stop only. An earlier version also scheduled a restart at 23:00,
+            # which claimed three things we cannot keep: that 23:00 is cheaper
+            # (no evidence), that restoring power resumes the drying cycle (it
+            # depends on the appliance), and that an approval given now still
+            # applies to a machine that starts itself hours later. The user
+            # restarts it, and is told so before approving.
             out.append(Candidate(
-                kind="delay_dryer",
+                kind="stop_dryer",
                 device_id="dryer",
                 device_name="Balcony Dryer",
                 actions=[{"action": "power", "value": False}],
-                label="turn the dryer off now and restart it at 11 PM tonight",
-                done="turned the dryer off and set it to restart at 11 PM",
+                label="turn the dryer off now; you would start it again yourself",
+                done="turned the dryer off, and left it for you to restart",
                 tier=TIER2,
-                job={"device_id": "dryer",
-                     "actions": [{"action": "power", "value": True}],
-                     "rule": {"type": "once", "run_at": _next_2300()},
-                     "repeat_label": "one time at 23:00"},
                 reason=f"{snapshot.get('heat_load_w', 0)} W of heat load, kitchen at {risk.current:.1f}\u00b0C",
             ))
         # The fridge duty is the evidence: past 60% the compressor is paying
@@ -197,12 +199,3 @@ def candidates(risk, snapshot: dict) -> list[Candidate]:
                 ))
 
     return out
-
-
-def _next_2300(now=None) -> str:
-    from datetime import datetime, timedelta
-    now = now or datetime.now()
-    target = now.replace(hour=23, minute=0, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return target.isoformat(timespec="seconds")

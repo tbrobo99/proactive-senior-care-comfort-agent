@@ -113,7 +113,7 @@ L1 \texttt{dehumidifier\_on} & Balcony dehumidifier \\
 L1 \texttt{purifier\_on} & Living-room purifier \\
 L1 \texttt{ventilate\_kitchen} & Range hood, fan high \\
 L1 \texttt{precool\_kitchen} & Kitchen AC to 24 $^{\circ}$C \\
-L2 \texttt{delay\_dryer} & Dryer off; restart by hand \\
+L2 \texttt{stop\_dryer} & Dryer off; restart by hand \\
 L2 \texttt{preheat\_cooktop} & Cooktop on early \\
 \hline
 \end{tabular}
@@ -127,7 +127,7 @@ Spoken prompts use the browser's speech synthesis API; the voice is whatever the
 
 \subsection{FR-5: the fail-safe timeout}
 
-The deadline is stamped after the question is produced, not when the risk fires, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and confirmation re-checks the deadline before accepting an answer: the expiry sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices unchanged, reports it, and silences the risk for 30 minutes.
+The deadline is stamped after the question is produced, not when the risk fires, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and confirmation re-checks the deadline before accepting an answer: the expiry sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. On expiry no pending Level 2 action is executed, Level 1 actions already completed remain in effect, and the expiry is reported and the risk silenced for 30 minutes.
 
 \subsection{Control flow}
 

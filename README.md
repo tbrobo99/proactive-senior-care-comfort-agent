@@ -171,10 +171,10 @@ The mold scenario ends with the washer ventilating and the balcony dehumidifier
 running, unprompted. The oven scenario turns on the kitchen range hood and cools
 the kitchen to 24 °C — the fridge's compressor is at 80% duty and there is a bake
 on the calendar in 20 minutes — and then asks *"I would like to turn the dryer
-off now and restart it at 11 PM tonight; switch the cooktop on now so it is hot
-when you start. Shall I?"* — aloud, because that question must not be missed. If
-nobody answers, the dryer keeps its schedule and the hob stays cold, which is the
-only honest reading of silence.
+off now, and you would start it again yourself; switch the cooktop on now so it
+is hot when you start. Shall I?"* — aloud, because that question must not be
+missed. If nobody answers, the dryer stays on and the hob stays cold, which is
+the only honest reading of silence.
 
 ---
 
@@ -987,7 +987,7 @@ mold  — 3 candidates
 oven_running  — 4 candidates
   check     median 1.1 ms  max 1.4 ms
   decision  median 1.85 s  (1.47–16.70)
-            llm: Tier 1 ventilate_kitchen, precool_kitchen / Tier 2 delay_dryer, preheat_cooktop
+            llm: Tier 1 ventilate_kitchen, precool_kitchen / Tier 2 stop_dryer, preheat_cooktop
             0.6% of the 300 s fail-safe
 ```
 

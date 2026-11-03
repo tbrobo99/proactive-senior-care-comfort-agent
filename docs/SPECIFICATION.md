@@ -259,21 +259,24 @@ a suggestion. The decision layer may take some, reorder, or take none.
 | mold | washer not already ventilating | `ventilate_washer` | 1 |
 | mold | balcony humidity > 55% and dehumidifier off | `dehumidifier_on` | 1 |
 | mold | purifier off | `purifier_on` | 1 |
-| thermal | dryer is running | `delay_dryer` | 2 |
+| thermal | dryer is running | `stop_dryer` | 2 |
 | thermal | range hood off | `ventilate_kitchen` | 1 |
 | thermal | a cooking session starts within 30 min and the kitchen AC is off | `precool_kitchen` | 1 |
 | thermal | a cooking session starts within 30 min and the cooktop is off | `preheat_cooktop` | 2 |
 
-**S-5.3 `delay_dryer` carries a restart job**: dryer off now, back on at the
-next **23:00** local, one-shot. The job is created **only if the user confirms**
-— an unconfirmed approval must not leave a scheduled job behind.
+**S-5.3 `stop_dryer` stops, and nothing else follows**: the dryer goes off now
+and the user starts it again by hand. No restart job is created. A restart at a
+fixed hour would claim three things we cannot keep: that the hour is cheaper (no
+evidence), that restoring power resumes the drying cycle (it depends on the
+appliance), and that an approval given now still applies to a machine that
+starts itself hours later.
 
 **S-5.4 Tier table — the whitelist.** Exactly what S-5.2 can produce; a test
 fails if the two drift apart.
 
 | Tier 1 — automatic | Tier 2 — approval required |
 |---|---|
-| `ventilate_washer` | `delay_dryer` |
+| `ventilate_washer` | `stop_dryer` |
 | `dehumidifier_on` | `preheat_cooktop` |
 | `purifier_on` | |
 | `ventilate_kitchen` | |
@@ -371,12 +374,16 @@ precision. A deadline truncated to whole seconds and compared against a
 microsecond `now` expires up to one second early, and a fail-safe that fires
 early is a fail-safe that lies.
 
-**S-7.4 Expiry executes nothing.** The house is left exactly as it was, and the
-user is told: *"I asked about the Balcony Dryer and did not hear back, so I
-changed nothing. Everything is as it was."*
+**S-7.4 Expiry executes nothing pending.** No Level 2 action from the expired
+question runs. Level 1 actions that already completed are not rolled back, so
+the message names the devices that were asked about instead of claiming the
+whole house is untouched: *"I asked about the Balcony Dryer and did not hear
+back, so I left it alone. Anything already done stays as it is."*
 
-**S-7.5 Confirm executes, then schedules.** Actions are applied first; the
-restart job is created only if the action succeeded.
+**S-7.5 Confirm executes the action it asked about.** Actions are applied, and
+nothing is queued behind them. An approval authorises what it asked about, at
+the moment it is given; it is not a standing permission for the same device to
+start again hours later.
 
 **S-7.6 In memory, deliberately.** Pending approvals are not persisted. A
 restart drops them, which under this policy means nothing executes — the safe
@@ -479,7 +486,7 @@ user, and neither is written by the model:
 | Message | Shape |
 |---|---|
 | Tier-1 report | *"The washing machine has been shut for 2 hours with wet washing still inside it. So I started drum micro-ventilation on the washer and turned on the balcony dehumidifier."* |
-| Tier-2 question | *"The kitchen is at 32 °C and the dryer is adding heat. I would like to turn the dryer off now and restart it at 11 PM tonight; switch the cooktop on now so it is hot when you start. Shall I? Reply yes or no — no answer in 5 minutes keeps everything as it is."* |
+| Tier-2 question | *"The kitchen is at 32 °C and the dryer is adding heat. I would like to turn the dryer off now, and you would start it again yourself; switch the cooktop on now so it is hot when you start. Shall I? Reply yes or no — no answer in 5 minutes changes nothing further."* |
 
 The index score, the extrapolation and the wattage stay in the message payload,
 where the audit trail and this document can read them. They were in the
@@ -572,9 +579,9 @@ Phase-2 cases are named).
 | A-9 | approval expires | nothing executed | `test_expiry_executes_nothing` |
 | A-10 | mold scenario, LLM off | only Tier 1 runs, no question asked | `test_mold_scenario_runs_tier1_only` |
 | A-11 | thermal scenario | Tier 1 runs **and** Tier 2 is asked | `test_thermal_scenario_executes_tier1_and_asks_tier2` |
-| A-12 | user confirms | actions applied + restart job created | `test_confirmed_approval_executes_and_schedules_restart` |
+| A-12 | user confirms | actions applied, nothing scheduled | `test_confirmed_approval_stops_the_dryer_and_schedules_nothing` |
 | A-13 | user declines | house unchanged | `test_declined_approval_changes_nothing` |
-| A-14 | user never answers | house unchanged | `test_expired_approval_changes_nothing` |
+| A-14 | user never answers | no Level 2 action executes | `test_expired_approval_changes_nothing` |
 | A-15 | two ticks while pending | exactly one question | `test_second_tick_does_not_duplicate_a_pending_ask` |
 | A-16 | tick immediately after intervening | cooldown suppresses it | `test_cooldown_blocks_immediate_repeat` |
 | A-17 | LLM chooses a subset | only that subset runs | `test_llm_subset_is_respected` |
@@ -582,6 +589,9 @@ Phase-2 cases are named).
 | A-19 | LLM returns garbage | rule default, still safe | `test_llm_garbage_falls_back_to_rule_default` |
 | A-20 | LLM chooses only Tier 1 | no question is asked | `test_llm_choosing_only_tier1_skips_the_question` |
 | A-21 | JSON with no `chosen` key | **not** an abstention; falls back to rule default | `test_llm_missing_chosen_key_is_not_an_abstention` |
+| A-22 | answer arrives after the deadline | nothing executes, reported as an expiry | `test_a_late_confirmation_does_not_stop_the_dryer` |
+| A-23 | the same approval confirmed twice | the action runs once | `test_confirming_twice_stops_the_dryer_once` |
+| A-24 | expiry after Tier 1 already ran | message names the device, does not claim the house is untouched | `test_expiry_message_does_not_claim_the_whole_house_is_untouched` |
 
 ---
 

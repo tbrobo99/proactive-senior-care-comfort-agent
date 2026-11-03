@@ -215,7 +215,7 @@ class ProactiveEngine:
             self._cooldown[ap.risk_kind] = time.monotonic() + self.quiet_seconds
             db.add_message("system",
                            f"\u23f3 I asked about {_devices(ap)} and did not hear back, "
-                           f"so I changed nothing. Everything is as it was.",
+                           f"so I left it alone. Anything already done stays as it is.",
                            {"approval": ap.to_dict()})
         return {"ts": snap["ts"], "risks": [r.kind for r in fired], "events": events}
 
@@ -418,18 +418,15 @@ class ProactiveEngine:
             self.sensors.note_action(item["device_id"], item["actions"])
             executed.append({"device_id": item["device_id"], "ok": bool(res.get("ok")),
                              "error": res.get("error")})
-            job = item.get("job")
-            if job and res.get("ok"):
-                db.add_job(job["device_id"], item.get("device_name", job["device_id"]),
-                           job["actions"], job["rule"], job["rule"]["run_at"],
-                           repeat_label=job.get("repeat_label", ""),
-                           source_text=f"approved:{approval_id}")
+        # No job is created here. An approval authorises the action that was
+        # asked about, at the moment it is given; it is not a standing
+        # permission for the same device to start again hours later. A
+        # candidate that did carry a `job` would be a second decision the user
+        # never saw.
         done = _join([it.get("done") or it.get("label") or it.get("device_id", "")
                       for it in ap.actions])
-        restarted = any(it.get("job") for it in ap.actions)
         db.add_message("system",
-                       f"\u2713 You said yes, so I {done}."
-                       + (" It will start again later, as we agreed." if restarted else ""),
+                       f"\u2713 You said yes, so I {done}.",
                        {"approval": ap.to_dict(), "executed": executed})
         return {"ok": True, "approval": ap.to_dict(), "executed": executed}
 
