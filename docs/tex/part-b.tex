@@ -61,15 +61,15 @@ sunruitan2024@126.com, tbrobo99@outlook.com}
 \maketitle
 \setcounter{section}{2}
 
-This covers sections III and IV of Deliverable B. It describes \textbf{what the code in the repository does today}, not what we intend to build: every mechanism below points at a file, and a behaviour that is designed but not implemented is not described here at all.
+This covers sections III and IV of Deliverable B. It describes \textbf{what the code in the repository does today}: every mechanism below points at a file. Where something is designed but not yet built, it says so --- the attachment lists three of those.
 
 \section{Development Environment}
 
 \subsection{Platform and language}
 
-The system is one Python process: \texttt{run.py} starts a sensor layer that simulates the appliances, a proactive engine that reads it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving the phone interface and the JSON API. No build step, no database server.
+FSD-Home is two halves in one repository. The backend is a single Python process: \texttt{run.py} starts a sensor layer that simulates the appliances, a proactive engine that reads it once a second, and a \texttt{ThreadingHTTPServer} on port 8848 serving the JSON API. The interface is plain HTML, CSS and JavaScript, no framework: it shows device state, takes input, and puts approval questions on screen. No build step, no database server.
 
-Python 3.10 or newer, standard library only --- \texttt{requirements.txt} lists no required package, and CI runs the suite on 3.10 to 3.13 under both Linux and Windows. The interface is plain HTML, CSS and JavaScript with no framework; a service worker makes it installable on a phone home screen. The same code runs on Windows, Linux, ARM (mini PC, Raspberry Pi, OpenWrt router) and a small VM. Nothing in the core needs a GPU, a container or a network.
+The backend targets Python 3.10 or newer and needs no third-party package --- \texttt{requirements.txt} lists none, and CI is configured to run the suite on 3.10, 3.12 and 3.13 under Linux and Windows. The interface becomes installable on a phone home screen through a service worker, but only over HTTPS: served on the LAN as plain HTTP, the browser will not register it. Both halves run on Windows, Linux, ARM (mini PC, Raspberry Pi, OpenWrt router) and a small VM, and nothing needs a GPU, a container or a network.
 
 \subsection{Software and algorithms}
 
@@ -81,28 +81,11 @@ Python 3.10 or newer, standard library only --- \texttt{requirements.txt} lists 
 
 \subsection{Cost}
 
-Running and demonstrating the system costs nothing: no paid service is required and the simulator replaces the hardware. Two things are optional and priced per use --- model calls, billed per token by whichever provider is configured, and hosting, if the demo must reach outside the campus network; one core and one gigabyte is enough for the latter. \textbf{The provider, the model and the hosting arrangement for the final demo are not decided yet}, so they are candidates, not commitments.
+With the simulator and no paid model, running and demonstrating costs nothing: no new hardware and no subscription. \textbf{The configuration we currently run is not that one} --- GLM-4-Flash is enabled, so calls are billed per token, and at demo volume that is cents rather than zero. Hosting is a cost only if the demo must reach outside the campus network; one core and one gigabyte is enough for that. The provider and hosting arrangement for the final demo are not decided yet, so they are candidates, not commitments.
 
 \subsection{Division of work}
 
-Each area maps to files, so the split is checkable rather than nominal: \texttt{app/risk.py} and \texttt{app/policy.py} hold the scoring and the whitelist, \texttt{app/web/} the interface, \texttt{tests/} the suite, \texttt{app/sensors.py} and \texttt{eval/} the simulator and its measurements.
-
-\begin{table*}[tbp]
-\centering
-\caption{Ownership.}
-\label{tab:I}
-\footnotesize
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\dimexpr 0.1949\textwidth-2.488pt\relax}>{\raggedright\arraybackslash}p{\dimexpr 0.7451\textwidth-9.512pt\relax}@{}}
-\hline
-\textbf{Member} & \textbf{Owns} \\
-\hline
-Tang Bin & Risk model, policy, engine loop, deployment \\
-Ha Yun Kim & Architecture, interface, documentation, Git workflow \\
-SooYoung Song & Requirements, safety policy, acceptance tests \\
-Ruitan Sun & User needs, usability sessions, simulator scenarios \\
-\hline
-\end{tabular}
-\end{table*}
+Tang Bin owns the engine, policy and risk model; Ha Yun Kim the architecture and interface; SooYoung Song the requirements and safety policy; Ruitan Sun the scenarios and usability work. Each area maps to files, so the split is checkable: \texttt{app/risk.py} and \texttt{app/policy.py} hold the scoring and the whitelist, \texttt{app/web/} the interface, \texttt{tests/} the suite, \texttt{app/sensors.py} and \texttt{eval/} the simulator and its measurements.
 
 \section{Specifications}
 
@@ -110,7 +93,7 @@ Each requirement below is stated in Deliverable A and realised by the mechanism 
 
 \subsection{FR-1: real-time telemetry at 1 Hz}
 
-\texttt{sensors.tick()} rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. It is appended to a fixed-length history per signal --- 300 samples, five minutes --- which is what the trend extrapolation reads, and written to JSONL and CSV under \texttt{data/sensors/} so a session can be replayed.
+\texttt{sensors.tick()} rebuilds one snapshot per second: room temperature and humidity, washer drum humidity and door state, appliance power draw, calendar entries and occupancy. It is appended to a fixed-length history per signal --- 300 samples, five minutes --- which is what the trend extrapolation reads. Signals also land under \texttt{data/sensors/}: a JSONL append log, and a CSV that holds only the latest state. The JSONL is what a replay would read; no replay tool exists yet.
 
 \subsection{FR-2: predictive risk, MRI and TOI}
 
@@ -126,11 +109,11 @@ Each requirement below is stated in Deliverable A and realised by the mechanism 
 
 where h is drum humidity \%, s hours sealed, W heat load, D fridge duty cycle, T\_b balcony and T\_k kitchen temperature, B = 1 when a session starts inside the window. Two limits: the projection is a least-squares slope that returns zero below three samples, and calendar entries are not yet filtered by meal type --- any entry in the window counts.
 
-\textbf{On provenance:} the coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the numbers are ours, and they are the first thing we will recalibrate against real traces. Nothing is trained, and every point of a score names the driver that earned it.
+\textbf{On provenance:} the coefficients and the 70 / 24 / 27 / 60 thresholds are \textbf{project-defined} --- not taken from EPA or ASHRAE guidance, and no published source provides this pair of formulae. The literature explains \emph{why} trapped moisture and compressor duty matter; the numbers are ours, and they are the first thing we will recalibrate against traces from the simulator. Nothing is trained, and every point of a score names the driver that earned it.
 
 \subsection{FR-3: the two-level framework}
 
-An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact, reversible and inside the range the household has already allowed; Level 2 means it moves a schedule or puts heat where nobody is standing. Nothing downstream can invent an action, and a test enforces that every entry is one the rules can actually propose.
+An action's level comes from one table, \texttt{policy.ACTION\_TIERS}, and a kind not in it defaults to \textbf{Level 2}. Level 1 means low impact and reversible; Level 2 means it moves a schedule or puts heat where nobody is standing. What the house may do on its own is fixed by the whitelist and its parameters --- there is no per-user authorisation range in the code, so the table is the whole of the policy. Nothing downstream can invent an action, and a test enforces that every entry is one the rules can actually propose.
 
 \begin{table}[tbp]
 \centering
@@ -160,7 +143,7 @@ Prompts are spoken through the browser's own speech synthesis: nothing is record
 
 \subsection{FR-5: the fail-safe timeout}
 
-\texttt{approval.propose()} stamps \texttt{expires\_at} \textbf{after} the question is produced, not when the risk fired, so a slow model costs the user nothing. An approval not explicitly confirmed expires at 300 s, and \texttt{confirm()} re-checks that deadline before accepting an answer --- the sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices as they were, says so, and silences the risk for 30 minutes. Asking again three minutes later is not respect.
+\texttt{approval.propose()} stamps \texttt{expires\_at} \textbf{after} the question is produced, not when the risk fired, so the 300 s runs from the question rather than from the risk. An approval not explicitly confirmed expires at 300 s, and \texttt{confirm()} re-checks that deadline before accepting an answer --- the sweep runs on the tick, a model call can hold the tick up, and without the check a late answer would execute between two sweeps. Expiry leaves the devices as they were, says so, and silences the risk for 30 minutes. Asking again three minutes later is not respect.
 
 \subsection{One pass, in code}
 
@@ -199,6 +182,6 @@ Not part of sections III and IV. These are the three things worth adding that ar
 
 \textbf{2. The refusal budget.} Every declined or expired question buys 30 minutes of silence, which the code already enforces. What it does not do is count. Reporting "we asked 6 times this week and you said no 2 times" turns the objection that a house which keeps asking is a house nobody listens to into a number we can tune. Cost: one aggregate query over \texttt{logs}.
 
-\textbf{3. An adversarial pass over the decision layer.} The gate is the claim; hostile model output is the proof. Feed the loop a model that returns a device id it was never given, an action outside the whitelist, a Level 2 action with a fabricated reason, and an empty reply --- then assert that nothing reaches the hardware. Cost: a test file, no product change.
+\textbf{3. An adversarial pass over the decision layer.} The gate is the claim; hostile model output is the proof. Feed the loop a model that returns a device id it was never given, an action outside the whitelist, a Level 2 action with a fabricated reason, and an empty reply --- then assert that nothing outside the whitelist runs and no Level 2 action executes without approval. An invalid reply may still fall back to the rule candidates and run a legal Level 1 action; that is the design, not a leak. Cost: a test file, no product change.
 
 \end{document}
