@@ -463,4 +463,4 @@ class ProactiveEngine:
 
 def _candidate_dict(c) -> dict:
     return {"kind": c.kind, "device_id": c.device_id, "device_name": c.device_name,
-            "actions": c.actions, "label": c.label, "done": c.done, "job": c.job}
+            "actions": c.actions, "label": c.label, "done": c.done}

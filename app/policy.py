@@ -62,8 +62,6 @@ class Candidate:
     # Past-tense form for the report the user reads *after* the action ran:
     # "I started drum micro-ventilation", not "I start drum micro-ventilation".
     done: str = ""
-    # For Tier-2 schedule shifts: the job to create if the user confirms.
-    job: dict | None = None
     reason: str = ""      # why the rule proposed it — evidence, not decoration
 
     def __post_init__(self) -> None:

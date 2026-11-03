@@ -161,10 +161,13 @@ class PolicyTest(Base):
         cands = {c.kind: c for c in policy.candidates(r, snap)}
         self.assertEqual(cands["ventilate_kitchen"].tier, policy.TIER1)
         self.assertEqual(cands["stop_dryer"].tier, policy.TIER2)
-        # Stop only. No restart is scheduled behind the user's back: an approval
-        # covers the action it asked about, not the same device starting again
-        # hours later.
-        self.assertIsNone(cands["stop_dryer"].job)
+        # Stop only. The candidate carries one action — power off — and nothing
+        # behind it: an approval covers the action it asked about, not the same
+        # device starting again hours later. `Candidate` has no field for a
+        # follow-up job, so a restart cannot be smuggled back in here.
+        self.assertEqual(cands["stop_dryer"].actions,
+                         [{"action": "power", "value": False}])
+        self.assertFalse(hasattr(cands["stop_dryer"], "job"))
 
     def test_unknown_action_defaults_to_tier2(self):
         self.assertEqual(policy.tier_of("invented_action"), policy.TIER2)
