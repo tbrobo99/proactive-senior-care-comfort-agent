@@ -1,0 +1,258 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{balance}
+
+\begin{document}
+
+\title{Proactive Comfort Agent: Full Self-Driving Home Orchestration}
+
+\author{
+  \mbox{%
+    \begin{minipage}{0.24\textwidth}
+      \centering
+      Ha Yun Kim\\
+      \emph{dept. of Information Systems}\\
+      \emph{Hanyang University}\\
+      Seoul, Korea\\
+      \texttt{hykim1215@hanyang.ac.kr}
+    \end{minipage}%
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+      \centering
+      SooYoung Song\\
+      \emph{dept. of Information Systems}\\
+      \emph{Hanyang University}\\
+      Seoul, Korea\\
+      \texttt{sys1109@hanyang.ac.kr}
+    \end{minipage}%
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+      \centering
+      Ruitan Sun\\
+      \emph{dept. of Information Systems}\\
+      \emph{Hanyang University}\\
+      Seoul, Korea\\
+      \texttt{sunruitan2024@126.com}
+    \end{minipage}%
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+      \centering
+      Tang Bin\\
+      \emph{dept. of Information Systems}\\
+      \emph{Hanyang University}\\
+      Seoul, Korea\\
+      \texttt{tbrobo99@outlook.com}
+    \end{minipage}%
+  }
+}
+
+\maketitle
+
+\begin{abstract}
+\textbf{\emph{Abstract}---Modern smart homes present usability barriers when users must manage disconnected appliance apps, monitor environmental hazards, and coordinate high-load operations. We propose FSD-Home (Full Self-Driving Home Orchestration), a proactive orchestration system designed for inclusive, zero-labor living. By evaluating real-time IoT telemetry streams alongside household schedules, FSD-Home predicts environmental and energy risks---such as post-wash mold buildup or kitchen thermal overload---before they escalate. To ensure safety and autonomy, the system introduces a Tesla-inspired Risk-Graded Framework: Level 1 background adjustments run automatically with plain-language updates, while Level 2 high-stakes operations require explicit user approval via a clear interface overlay.}
+\end{abstract}
+
+\begin{IEEEkeywords}
+\textbf{\emph{Keywords}---Smart Home Orchestration, FSD-Home, Full Self-Driving Home, Risk-Graded Autonomy, Level 1 and Level 2 Control, LG ThinQ Ecosystem.}
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+\subsection{Motivation}
+Smart home appliances are ubiquitous today, but having more features does not automatically ensure a seamless experience for every member of a household \cite{b9}. Complex menus, fragmented mobile applications, and lack of cross-device coordination create unnecessary cognitive burden \cite{b10}. Over 67\% of surveyed consumers report experiencing friction with hidden menus and unclear controls on modern appliances \cite{b11}. Furthermore, routine household oversights cause major safety and hygiene issues: 35.3\% of residential fires start from unattended cooking \cite{b12, b13}, and wet laundry left in closed washers quickly leads to mold and bacterial growth \cite{b3, b14}.
+
+\subsection{Problem Statement}
+Current smart home apps like LG ThinQ work in reactive silos \cite{b15}. They wait for manual button taps or send passive alerts (such as ``Cycle Finished''), leaving household members to figure out what to do \cite{b6}. More importantly, appliances don't talk to each other about room heat or power load. When someone bakes in a hot oven while running a dryer, room temperatures surge, forcing the refrigerator and AC to work harder and draw peak electricity without any coordinated cooling \cite{b4}. FSD-Home solves this by combining continuous sensor tracking with automated cross-appliance control.
+
+\subsection{Related Software}
+Current commercial tools offer great single-device features: LG AI DD\texttrademark{} senses fabric softness via motor torque; LG ezDispense\texttrademark{} handles detergent dosing; and LG ThinQ ON / ThinQ Claw provides conversational voice hubs \cite{b1, b15}. Samsung's Bespoke AI sends lifestyle pattern notifications \cite{b2, b16}. But none of them coordinate temperature and energy across multiple devices \cite{b5}. FSD-Home introduces three main contributions: (1) explicit risk scores for mold (MRI) and kitchen heat (TOI), (2) a Tesla-inspired Level 1 / Level 2 autonomy model with safe standby fallback, and (3) an inclusive overlay designed around WCAG 2.2 contrast and touch targets \cite{b17}.
+
+\section{Development Environment}
+
+\subsection{Choice of Software Development Platform}
+The FSD-Home backend system is developed using Python 3.10+ (targeting standard CPython 3.11 execution) without heavy external framework dependencies for core processing.
+
+\textbf{Backend Runtime:} Built with Python standard library modules (\texttt{http.server}, \texttt{threading}, \texttt{sqlite3}) to maintain lightweight execution, high portability, and fast cold-start performance.
+
+\textbf{Frontend UI:} Developed using vanilla HTML5, CSS3, and ES6 JavaScript (No-build step, zero external dependencies). It interacts with the backend via HTTP REST endpoints (\texttt{GET /api/proactive}, \texttt{POST /api/approvals/<id>/confirm}).
+
+\textbf{Storage and Persistence:} SQLite 3.43 utilizing Write-Ahead Logging (WAL) mode for transactional isolation, audit decision logs, and user preference state tracking.
+
+\textbf{Target Operating Environment:} Tested locally on Windows 11 (AMD Ryzen 7 5800H, 16GB RAM) without requiring discrete GPU acceleration. Designed for cross-platform portability across Linux (Ubuntu 22.04 LTS) and ARM-based single-board devices (e.g., Raspberry Pi 4, OpenWrt routers).
+
+\textbf{Cloud Hybrid Architecture:} While real-time risk checks run deterministically on local infrastructure in 1.2 ms, LLM reasoning calls out asynchronously to OpenAI-compatible cloud endpoints (Zhipu GLM-4-Flash / vLLM API).
+
+\subsection{Software and Algorithms in Use}
+The system decouples real-time physical risk perception from LLM decision reasoning:
+\begin{itemize}
+    \item \textbf{Deterministic Risk Engines (\texttt{app/risk.py}):} Evaluates Mold Risk Index (MRI) and Thermal Overload Index (TOI) using closed-form thermodynamic models and 30-minute least-squares linear trend forecasting.
+    \item \textbf{OpenAI-Compatible LLM Inference:} Integrates with Zhipu AI \texttt{glm-4-flash} (or local vLLM endpoints) for intent resolution and action candidate selection.
+    \item \textbf{Deterministic Safety Gating (\texttt{app/policy.py}):} Restricts LLM output via a strict 7-action candidate whitelist divided into Level 1 (Autonomous) and Level 2 (Approval Required) tiers.
+\end{itemize}
+
+\subsection{Cost Estimation}
+The breakdown of hardware and software deployment costs is detailed in Table~\ref{tab:cost}.
+
+\begin{table}[htbp]
+\caption{Cost Estimation}
+\label{tab:cost}
+\centering
+\begin{tabular}{p{2.3cm}p{3.8cm}l}
+\toprule
+\textbf{Item} & \textbf{Specification} & \textbf{Cost} \\
+\midrule
+Development HW & Existing Ryzen 7 PC & KRW 0 \\
+Core Software & Python 3.11, SQLite & KRW 0 \\
+Cloud API / LLM & Zhipu GLM-4-Flash & KRW 0 \\
+Deployment & Local / Edge Simulation & KRW 0 \\
+\midrule
+\textbf{Total Cost} & & \textbf{KRW 0} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Task Distribution}
+The division of responsibilities among project team members is summarized in Table~\ref{tab:roles}.
+
+\begin{table}[htbp]
+\caption{Role Assignments}
+\label{tab:roles}
+\centering
+\begin{tabular}{llp{3.6cm}}
+\toprule
+\textbf{Role} & \textbf{Assigned} & \textbf{Task Description} \\
+\midrule
+User & Ruitan Sun & User needs \& service quality. \\
+\hline
+Customer & SooYoung Song & Safety boundaries \& thresholds. \\
+\hline
+Software Dev. & Tang Bin & Backend loop \& risk engine. \\
+\hline
+Dev. Manager & Ha Yun Kim & Architecture, LaTeX, UI. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Specifications}
+The detailed implementation specifications for our Phase 2 project development environment are detailed below.
+
+\subsection{FR-1: Real-Time Telemetry Perception}
+The \texttt{SensorSimulator} class in \texttt{app/sensors.py} generates 1 Hz time-series IoT telemetry snapshots.
+\begin{itemize}
+    \item \textbf{Data Pipeline:} Telemetry is saved to \texttt{data/sensors/MRI\_TOI\_log.jsonl} and \texttt{sensor\_history.csv}.
+    \item \textbf{Simulated Metrics:} Room temperatures (\textdegree C), relative humidity (\%), drum moisture decay, appliance door contact, and active power draw (W).
+\end{itemize}
+
+\subsection{FR-2: Predictive Risk \& Energy Modeling}
+The risk assessment module (\texttt{app/risk.py}) computes MRI and TOI deterministically within 1.2 ms per tick:
+\begin{equation}
+\text{MRI} = \text{clamp}[(H - 70.0) \times 3.2 + (S \times 6.0) + \max(0, T - 24.0) \times 1.5]
+\end{equation}
+\begin{equation}
+\text{TOI} = \text{clamp}[W / 25.0 + \max(0, T_k - 27.0) \times 6.0 + \max(0, D - 0.6) \times 60.0]
+\end{equation}
+If either index exceeds the threshold of 50.0, an environmental trigger event is dispatched to the proactive decision engine.
+
+\subsection{FR-3: Level 1 \& Level 2 Action Framework}
+The local rule engine strictly enforces an action whitelist (Table~\ref{tab:whitelist}).
+\begin{itemize}
+    \item \textbf{Level 1 (Autonomous):} Non-destructive actions execute immediately with a single-line audit log entry.
+    \item \textbf{Level 2 (Confirmation Required):} Schedule changes or high-power operations generate a pending confirmation state in \texttt{app/approval.py}.
+\end{itemize}
+
+\begin{table}[htbp]
+\caption{Proposed Action Whitelist}
+\label{tab:whitelist}
+\centering
+\begin{tabular}{lp{4cm}}
+\toprule
+\textbf{Action} & \textbf{Target Device} \\
+\midrule
+L1 ventilate\_washer & Washer, drum vent \\
+L1 dehumidifier\_on & Balcony dehumidifier \\
+L1 purifier\_on & Living-room purifier \\
+L1 ventilate\_kitchen & Range hood, fan high \\
+L1 precool\_kitchen & Kitchen AC to 24 \textdegree C \\
+L2 stop\_dryer & Dryer off; restart by hand \\
+L2 preheat\_cooktop & Cooktop on early \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{FR-4: Inclusive UI/UX and Interface Specification}
+To minimize cognitive friction for all household users, including seniors, the web interface (\texttt{app/web/}) adheres to WCAG 2.2 accessibility standards:
+\begin{itemize}
+    \item \textbf{Level 2 Action Modal Overlay:} Triggers a high-contrast modal dialogue via REST polling (\texttt{GET /api/approvals}).
+    \item \textbf{Visual \& Touch Targets:} Contrast ratio $> 4.5:1$, primary touch targets $\ge 48 \times 48$\,px for \texttt{[Confirm]} and \texttt{[Decline]}.
+    \item \textbf{Real-Time Visual Countdown:} 300-second countdown timer. Auto-expires if unacted upon without altering device states.
+    \item \textbf{Multimodal Voice-Text Fallback:} Level 2 prompts spoken aloud via Web Speech API Text-to-Speech (TTS) with text input fallback.
+\end{itemize}
+
+\subsection{FR-5: Fail-Safe Default Policy}
+As specified in \texttt{app/approval.py}, Level 2 confirmation requests expire after a 300-second (5-minute) window. Upon expiration, the state transitions to \texttt{EXPIRED}, defaulting to safe standby without modifying hardware parameters or appliance schedules.
+
+\subsection{Control Flow}
+The core runtime control loop is structured as follows:
+
+\begin{lstlisting}[language=Python, basicstyle=\tiny\ttfamily, keywordstyle=\color{blue}]
+FUNCTION tick():  # 1 Hz sampling; decisions may wait
+    snap = sensors.snapshot(); sensors.record(snap)
+    for r in [r for r in risk.evaluate(snap, hist) if r.score >= 50.0]:
+        if cooling(r.kind) or pending(r.kind): continue
+        intervene(r, snap)  # may call the model
+    for ap in approvals.expire_due():  # deadline
+        quiet(ap.risk_kind, 30 min); report(ap)
+
+FUNCTION intervene(r, snap):
+    cands = policy.candidates(r, snap)  # rules
+    chosen = decide(r, cands)           # model
+    ask = []
+    for c in cands:
+        if tier_of(c) == TIER2: ask.append(c)
+        elif c in chosen: run(c)        # TIER1 only
+    if ask:  # every TIER2 candidate
+        approval.propose(ask, ttl=300)
+\end{lstlisting}
+
+\subsection{NFR-1: Latency \& Architectural Decoupling}
+\begin{itemize}
+    \item \textbf{Local Sensor Check Latency:} 1.2 ms per 1 Hz polling check.
+    \item \textbf{LLM Reasoning Latency:} 2.0--3.0 seconds per decision loop (triggered asynchronously upon index score $\ge 50.0$, with a 180-second cooldown period).
+\end{itemize}
+
+\balance
+
+\begin{thebibliography}{00}
+\bibitem{b1} LG Electronics, ``Affectionate Intelligence and Zero Labor Home Vision,'' LG ThinQ Ecosystem Whitepaper, 2024.
+\bibitem{b2} Samsung Electronics, ``Home Companion: Comprehension of Samsung Bespoke AI 2026,'' Jan. 2026.
+\bibitem{b3} U.S. Environmental Protection Agency (EPA), ``A Brief Guide to Mold, Moisture and Your Home,'' EPA 402-K-02-003, 2022.
+\bibitem{b4} ASHRAE, ``Standard 55: Thermal Environmental Conditions for Human Occupancy,'' ASHRAE, 2023.
+\bibitem{b5} T. Yuan et al., ``R-Judge: Benchmarking Safety Risk Awareness for LLM Agents,'' arXiv:2401.10019, 2024.
+\bibitem{b6} A. Pradhan, A. Lazar, and L. Findlater, ``Use of Intelligent Voice Assistants by Older Adults,'' ACM TOCHI, vol. 27, no. 4, 2020.
+\bibitem{b7} H. Zhang et al., ``PromptShield Home: Ambient Multimodal Prompt Injection Defense,'' arXiv:2608.05495, 2026.
+\bibitem{b8} M. Hewitt, ``Speaking to the Edge: Conversational Control of Smart Home IoT,'' Ph.D. thesis, Univ. of Sheffield, 2026.
+\bibitem{b9} Ministry of Science and ICT, ``2025 Survey on the Digital Divide,'' KDI Economic Info Center, Mar. 2026.
+\bibitem{b10} Money Today, ``2025 Digital Divide Survey: Competency Level Analysis,'' Mar. 2026.
+\bibitem{b11} Maeil Business Newspaper, ``Home Appliance Usability Survey for Consumers 50+,'' 2026.
+\bibitem{b12} Seoul Metropolitan Fire Headquarters, ``2019 Residential Fire Statistics Analysis,'' 2020.
+\bibitem{b13} National Fire Agency, ``Chuseok Holiday Fire Safety Bulletin,'' Seoul Shinmun, 2025.
+\bibitem{b14} World Health Organization (WHO), ``WHO Guidelines for Indoor Air Quality: Dampness and Mould,'' 2009.
+\bibitem{b15} LG Electronics, ``LG ThinQ Platform Specifications,'' Official Whitepaper, 2026.
+\bibitem{b16} Samsung India, ``2026 Range of Bespoke AI Appliances,'' Press Release, 2026.
+\bibitem{b17} W3C, ``Web Content Accessibility Guidelines (WCAG) 2.2,'' W3C Recommendation, 2023.
+\bibitem{b18} AdaHome, ``An Adaptive Smart Home Assistant using Local Language Models,'' arXiv:2607.18034, 2026.
+\bibitem{b19} Korea Meteorological Administration, ``Open Data Portal APIs,'' 2026.
+\bibitem{b20} C. Murad et al., ``Design guidelines for hands-free speech interaction,'' in Proc. MobileHCI '18, 2018.
+\bibitem{b21} NIST, ``IoT Device Cybersecurity Guidance,'' NIST Special Publication 800-213, 2021.
+\end{thebibliography}
+
+\end{document}
