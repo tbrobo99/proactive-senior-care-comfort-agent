@@ -11,11 +11,11 @@ Reversible, low-power, and — the property that actually matters — worst case
 a slightly dry room or a fan running for nothing, never a ruined garment, a
 delayed meal, or a hot surface nobody is watching.
 
-Tier 2 (approval required): anything that moves a *schedule* or touches a
-*heating* appliance. Delaying the dryer and restarting it off-peak is one
-realised case; switching the cooktop on ahead of a meal is the other. Both
-change what the user planned or put heat where a person is not standing, so the
-user decides.
+Tier 2 (approval required): anything that changes what the user planned or
+touches a *heating* appliance. Stopping a running dryer is one case; switching
+the cooktop on ahead of a meal is the other. Both change a plan or put heat
+where a person is not standing, so the user decides. Nothing here schedules a
+restart: the user starts the appliance again by hand.
 
 `candidates()` turns a risk into the actions worth considering. It deliberately
 produces a *set*, not a plan: the decision layer chooses among these, in the

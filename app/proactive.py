@@ -91,9 +91,10 @@ def _join(items: list[str]) -> str:
         return ""
     if len(items) == 1:
         return items[0]
-    # A label can contain its own "and" ("turn the dryer off and restart it at
-    # 11 PM"). Joining those with another "and" gives one sentence with three
-    # of them, which reads as a single long instruction rather than two.
+    # A label can contain its own "and" (a past-tense report such as
+    # "turned the dryer off, and left it for you to restart"). Joining those
+    # with another "and" gives one sentence with three of them, which reads as
+    # a single long instruction rather than two.
     if any(" and " in i for i in items):
         return "; ".join(items)
     return ", ".join(items[:-1]) + " and " + items[-1]
