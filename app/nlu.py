@@ -361,7 +361,16 @@ TEMP_MAKE_RE = re.compile(r"\bmake\s+it\s+(\d{1,2})\b", re.I)
 
 MODE_PATTERNS = [
     (re.compile(r"\b(cool|cooling|air\s*condition(?:ing)?|chill)\b", re.I), "cool"),
-    (re.compile(r"\b(heat|heating|warm\s+up)\b", re.I), "heat"),
+    # ``heat`` is also a noun in explanations such as "kitchen heat risk" and
+    # "the dryer is adding heat".  Treat it as an AC mode only when the user
+    # phrases it as an operation.  The old bare-word match turned informational
+    # questions into commands and could switch an AC to heating while discussing
+    # an already-hot room.
+    (re.compile(
+        r"\b(?:set|switch|change|put|turn)\b[^.?!]{0,40}?\b(?:to\s+)?(?:heat|heating)\b"
+        r"|\b(?:turn|switch)\s+(?:the\s+)?heat(?:ing)?\s+on\b"
+        r"|\b(?:heat|warm\s+up)\b[^.?!]{0,30}?\b(?:room|bedroom|living\s+room|kitchen|house)\b",
+        re.I), "heat"),
     (re.compile(r"\b(dry|dehumidif\w*)\b", re.I), "dry"),
     (re.compile(r"\bfan\s*(?:only|mode)\b", re.I), "fan"),
     (re.compile(r"\bauto\s*mode\b", re.I), "auto"),
@@ -880,3 +889,4 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
                       'schedule things. Try "set the living room AC to 26 degrees" '
                       'or "turn off the living room AC every night at 11 pm".')
     return res
+
