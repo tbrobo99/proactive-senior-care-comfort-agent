@@ -343,6 +343,68 @@ def match_device(text: str, devices: list[dict], default_room: str = "",
     return ties[0], []
 
 
+# A bare "the <noun>" that names nothing in this house is the user asking for
+# an appliance we do not have. It is NOT a reference to the device from the
+# previous turn. Measured live: after "turn on the living room AC", both
+# "set the TV to 24 degrees" and "turn on the banana" silently wrote to that
+# AC, because match_device() returned the fallback when nothing scored.
+_DEVICE_NOUN_RE = re.compile(
+    r"\b(?:the|my|a|an|this|that)\s+([A-Za-z][A-Za-z'-]{1,})\b")
+
+# Words that may follow a determiner in a home command without naming an
+# appliance: attributes, rooms, times, and the general nouns the rules use.
+# A closed list on purpose — anything else is an unknown device name.
+_NOT_A_DEVICE = frozenset("""
+temperature temp status state mode fan speed level power setting settings
+schedule timer task job reminder routine scene room rooms house home flat
+place area air water weather morning afternoon evening night day time clock
+light lights volume humidity outside forecast news music song movie recipe
+whole everything rest same best current target setpoint reading
+""".split())
+
+
+def _known_nouns(devices: list[dict]) -> set[str]:
+    """Words that can appear after a determiner without naming a new device.
+
+    Deliberately NOT `_vocab()`: that one also holds the food table, and
+    "banana" is a perfectly good food word but a terrible reason to treat
+    "turn on the banana" as a reference to the last appliance.
+    """
+    words = set(DOMAIN_WORDS) | _NOT_A_DEVICE
+    for d in devices:
+        for field in ("name", "room", "type", "type_label"):
+            words.update(re.findall(r"[a-z]+", (d.get(field) or "").lower()))
+    return words
+
+
+def names_unknown_device(text: str, devices: list[dict]) -> str | None:
+    """The first determiner+noun that names no appliance here, or None.
+
+    Used to stop the previous-turn device from standing in for something the
+    user named. The word itself is returned so the reply can say honestly
+    "there is no TV in this house" instead of just "which device?".
+    """
+    known = _known_nouns(devices)
+    for m in _DEVICE_NOUN_RE.finditer(text or ""):
+        word = m.group(1).lower()
+        if word in known:
+            continue
+        if any(p.search(word) for d in devices
+               for p in _alias_patterns(d.get("type", ""))):
+            continue
+        return m.group(1)
+    return None
+
+
+def device_clarify(word: str | None, devices: list[dict]) -> str:
+    """An honest question when the target cannot be determined."""
+    options = ", ".join(d["name"] for d in devices[:6])
+    if not word:
+        return f"Which device? I can control: {options}"
+    return (f'There is no "{word}" in this house. Which device did you mean? '
+            f'I can control: {options}')
+
+
 # ---------------------------------------------------------------- actions
 
 OFF_RE = re.compile(
@@ -419,6 +481,14 @@ QUERY_RE = re.compile(
     r"|\b(?:status|state)\s+(?:of|report)\b"
     r"|\bis\s+everything\s+(?:off|on)\b"
     r"|\bwhat(?:'s|\s+is)\s+(?:it|the\s+\w+)\s+doing\b", re.I)
+
+# A question about temperature has to be answered by a device that reports a
+# room temperature, not by the first appliance that happens to sit in the
+# room. In the kitchen, five devices tie on the room name and the first in
+# the list is the range hood, which has no thermometer at all.
+TEMP_QUERY_RE = re.compile(
+    r"\b(?:temperature|temp|degrees?|set\s+to)\b"
+    r"|\bhow\s+(?:hot|cold|warm)\b", re.I)
 
 CANCEL_RE = re.compile(
     r"\b(cancel|delete|remove|clear|drop)\b.*\b(schedule[sd]?|timer[s]?|task[s]?|job[s]?|reminder[s]?)\b"
@@ -793,9 +863,13 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
             actions = comfort
             res["comfort"] = True
 
-    # A feeling ("it's stuffy") is about the room, not about the last device we
-    # happened to touch, so do not silently resolve it to the fallback device.
-    fb = None if comfort else fallback_device
+    # A feeling ("it's stuffy") is about the room, not about the last device
+    # we happened to touch. A named appliance that does not exist here is not
+    # that device either: neither may silently borrow the fallback. Without
+    # the second condition, "set the TV to 24 degrees" wrote 24 C to the
+    # living room AC the user had just turned on.
+    unknown_device = names_unknown_device(t, devices)
+    fb = None if (comfort or unknown_device) else fallback_device
     targets, target_label = resolve_targets(t, devices, default_room, fb)
 
     if comfort:
@@ -830,8 +904,11 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
             return _ask_for(res, "action", devices, rule=rule,
                             targets=[{"id": d["id"], "name": d["name"]} for d in targets])
         if not targets:
-            return _ask_for(res, "target", devices, actions=actions, rule=rule,
-                            repeat_label=label)
+            out = _ask_for(res, "target", devices, actions=actions, rule=rule,
+                           repeat_label=label)
+            if unknown_device:
+                out["clarify"] = device_clarify(unknown_device, devices)
+            return out
         res.update(intent="schedule", actions=actions, rule=rule,
                    repeat_label=label, confidence=0.92)
         set_targets(res, targets, target_label)
@@ -840,7 +917,10 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
 
     if actions:
         if not targets:
-            return _ask_for(res, "target", devices, actions=actions)
+            out = _ask_for(res, "target", devices, actions=actions)
+            if unknown_device:
+                out["clarify"] = device_clarify(unknown_device, devices)
+            return out
         res.update(intent="control", actions=actions, confidence=0.88)
         set_targets(res, targets, target_label)
         # "everything off" is a figure of speech, and the agent needs to know it
@@ -850,8 +930,12 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
 
     # 5. status questions
     if QUERY_RE.search(t):
-        device, ties = match_device(t, devices, default_room, fallback_device)
+        device, ties = match_device(t, devices, default_room, fb)
         res.update(intent="query", confidence=0.85)
+        if not device and unknown_device:
+            # "is the TV on?" must not be answered with the living room AC.
+            res["clarify"] = device_clarify(unknown_device, devices)
+            return res
         if not device:
             pool = ([d for d in devices
                      if (d.get("room") or "").lower() == default_room.lower()]
@@ -859,6 +943,21 @@ def parse(text: str, devices: list[dict], now: datetime | None = None,
                     or devices)
             device = pool[0] if pool else None
             ties = []
+        if TEMP_QUERY_RE.search(t) and len(ties) > 1:
+            # "what's the temperature in the kitchen" ties five appliances on
+            # the room name and ties[0] is the range hood, which has no
+            # thermometer. That is not a rough answer, it is a different
+            # question. The AC is what reports a room temperature here, so
+            # take it when there is exactly one; otherwise ask rather than
+            # read a random appliance's power state.
+            sensors = [d for d in ties if d.get("type") == "air_conditioner"]
+            if len(sensors) == 1:
+                device, ties = sensors[0], []
+            else:
+                names = ", ".join(d["name"] for d in ties[:6])
+                res["clarify"] = (f"Which device did you mean? I found {names}. "
+                                  f"Name one and I'll read it.")
+                return res
         if device:
             set_targets(res, [device])
             if len(ties) > 1:

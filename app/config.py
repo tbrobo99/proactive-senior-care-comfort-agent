@@ -36,6 +36,16 @@ DEFAULTS: dict = {
         "cooktop_no_cook_timeout": 300,
         "cooktop_max_runtime": 1800,
     },
+    # Plain-text conversation for greetings and small talk. This layer never
+    # receives tools and never returns an intent: it can only write prose. A
+    # shorter timeout than the tool loop keeps "hello" from hanging on a slow
+    # endpoint; the local wording answers when the model cannot.
+    "chat": {
+        "enabled": True,
+        "temperature": 0.6,
+        "max_tokens": 200,
+        "timeout": 8,
+    },
     "agent": {
         # used when the user does not name a room
         "default_room": "Living Room",

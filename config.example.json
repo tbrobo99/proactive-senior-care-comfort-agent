@@ -21,6 +21,12 @@
     "default_room": "Living Room",
     "mode": "cascade"
   },
+  "chat": {
+    "enabled": true,
+    "temperature": 0.6,
+    "max_tokens": 200,
+    "timeout": 8
+  },
   "proactive": {
     "cooktop_require_presence": true,
     "cooktop_no_cook_timeout": 300,

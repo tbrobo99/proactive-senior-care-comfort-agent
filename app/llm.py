@@ -67,11 +67,16 @@ def _device_brief(devices: list[dict]) -> str:
 
 def chat(cfg: dict, messages: list[dict], tools: list[dict] | None = None,
          json_mode: bool = False, temperature: float = 0.1,
-         max_tokens: int = 600) -> dict:
+         max_tokens: int = 600, timeout: float | None = None) -> dict:
     """One round trip. Returns the assistant message dict unchanged.
 
     `tools` turns this into the agent-loop call: no JSON mode, and the reply may
-    carry `tool_calls` instead of content.
+    carry `tool_calls` instead of content. A plain-text call passes no tools,
+    so the model has no way to ask for a device action.
+
+    `timeout` lets a caller ask for a shorter wait than the configured default.
+    A greeting should fall back to its local wording in a couple of seconds,
+    not sit behind the 20 s budget a tool loop needs.
     """
     llm = cfg["llm"]
     url = (llm.get("base_url") or "").rstrip("/") + "/chat/completions"
@@ -91,7 +96,8 @@ def chat(cfg: dict, messages: list[dict], tools: list[dict] | None = None,
         "Content-Type": "application/json",
         "Authorization": f"Bearer {llm.get('api_key')}",
     })
-    with urllib.request.urlopen(req, timeout=float(llm.get("timeout", 20))) as resp:
+    wait = float(timeout if timeout is not None else llm.get("timeout", 20))
+    with urllib.request.urlopen(req, timeout=wait) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["choices"][0]["message"]
 

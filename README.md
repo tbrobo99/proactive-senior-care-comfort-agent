@@ -106,6 +106,8 @@ SQLite messages / logs + web status
 | `app/` | `approval.py` | Per-action pending, confirmed, declined and expired requests |
 | `app/` | `proactive.py` | Observe–decide–act loop, revalidation, safeguards, system messages |
 | `app/` | `audit.py` | Write-before-act gate and append-only audit events |
+| `app/` | `nlu.py` | Rule engine: time, device, action and status resolution |
+| `app/` | `chat.py` | Text-only conversation layer (no tools, no device access) |
 | `app/web/` | `index.html`, `app.js` | Approval queue, Safety log, device state, controls |
 | `app/` | `db.py` | SQLite schedules, messages, immutable audit log |
 | — | `run.py` | Entry point and demo scenarios |
@@ -124,6 +126,34 @@ python run.py
 
 Open <http://127.0.0.1:8848>. On Windows, `start.bat` also works. To open the
 same page from a phone on the local network, use `python run.py --lan`.
+
+---
+
+## Two paths for a message
+
+The Assistant page separates talking from acting:
+
+```text
+user message
+├─ a home command -> rule engine -> whitelist / safety approval -> audited execute
+└─ anything else  -> one short text reply (glm-4-flash, or local wording offline)
+```
+
+`app/chat.py` answers greetings, thank-yous, farewells and small talk. It is
+given no tools, returns a string rather than an intent, and imports none of
+the adapter, approval queue, scheduler or audit writer, so a conversational
+reply cannot change a device. Home words (`AC`, `set`, `temperature`, `room`),
+out-of-scope topics and the named scenes (`good morning`, `good night`,
+`I'm leaving`) always stay on the command path. With the model off or
+unreachable, short local wording answers instead, so `hello` still works in
+the fully offline demo.
+
+The rule engine no longer guesses a device. An appliance that is not in this
+house (`TV`, `toaster`, ...) is named back to the user with a question rather
+than silently writing to the device from the previous turn, while `set it to
+22` still refers to that device. A temperature question in a room holding
+several appliances goes to the air conditioner that reports the room
+temperature, not to the first device in the list.
 
 ---
 
@@ -192,8 +222,11 @@ python -m eval.latency
 ```
 
 The unit suite covers the risk indices, the seven-action whitelist, per-action
-approvals, pre-execution revalidation, cooktop safeguards and the append-only
-audit trail. `eval.run` is the intent-parser regression suite. `eval.latency`
+approvals, pre-execution revalidation, cooktop safeguards, the append-only
+audit trail, and the command / conversation split (`tests/test_chat.py`
+uses a scripted model to check that a chat request carries no tools and that
+no device write or audit action follows a greeting). `eval.run` is the
+intent-parser regression suite. `eval.latency`
 measures the local check and the model-backed decision separately; **without
 an LLM key only the local check half is measured**. GitHub Actions runs the
 unit tests and `eval.run` on Windows and Linux with Python 3.10, 3.12 and 3.13.
@@ -203,8 +236,9 @@ unit tests and `eval.run` on Windows and Linux with Python 3.10, 3.12 and 3.13.
 ## Options and scope
 
 - **Optional LLM:** copy `config.example.json` to `config.json` and fill in the
-  `llm` section. The model never owns sensor timing, risk calculation,
-  approval or device safety.
+  `llm` section. The `chat` section enables plain-text replies for greetings
+  and small talk; `chat.enabled: false` uses short local wording instead. The
+  model never owns sensor timing, risk calculation, approval or device safety.
 - **Optional LG ThinQ adapter:** `app/devices/thinq.py`, with `dry_run` enabled
   by default. Real-device control needs the optional `thinqconnect` SDK and
   payload calibration per appliance model.

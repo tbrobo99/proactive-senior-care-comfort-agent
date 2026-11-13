@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from . import agent_loop, audit, build, db, food, llm, nlu, scenes
+from . import agent_loop, audit, build, chat, db, food, llm, nlu, scenes
 from .devices.base import FAN_LABELS, MODE_LABELS, describe_action
 
 # how long a half-finished request stays open
@@ -111,6 +111,34 @@ class Agent:
             intent = nlu.parse(text, devices, now, default_room, fallback)
             intent = self._retry_repaired(text, intent, devices, now,
                                           default_room, fallback)
+
+            # 2b. The other door. The rules have had first say: a scene, a
+            # status question, a command and an out-of-scope topic all kept
+            # their own answers above. What is left is a greeting, a
+            # thank-you, a short bit of small talk, or an unrecognisable
+            # phrase — and none of those should buy a tool loop, let alone
+            # give one a chance to act on "thanks". This branch is checked
+            # *before* both model tiers, so the loop never sees chat text.
+            #
+            # `chat.reply` returns a string. It has no tools, no adapter, no
+            # approval queue and no audit writer, so there is no path from a
+            # model's words here to a device write — actions stays empty by
+            # construction rather than by promise.
+            if (intent["intent"] == "unknown"
+                    and not intent.get("out_of_scope")
+                    and chat.is_conversation(text)):
+                result = {
+                    "reply": chat.reply(self.cfg, text),
+                    "ok": True,
+                    "actions": [],
+                    "intent_name": "chat",
+                    "tier": "chat",
+                    "raw_text": text,
+                }
+                db.add_message("user", text, {"intent": "chat"})
+                db.add_message("assistant", result["reply"],
+                               {"intent": "chat", "actions": []})
+                return result
 
             # Agent mode hands the parse to the model instead of applying it.
             deliberated = False
@@ -502,6 +530,11 @@ class Agent:
         A message that is itself a complete command is not an answer, so the
         thread is dropped instead of hijacked.
         """
+        if chat.is_conversation(text):
+            # "thanks" is not an answer to "which room?". Leave the thread
+            # open and let the conversation layer reply with plain text —
+            # the loop must not get a turn in which it could act.
+            return None
         ctx = self._loop_ctx
         self._loop_ctx = None
         if not ctx or now > ctx["expires"]:
