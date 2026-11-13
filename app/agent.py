@@ -987,7 +987,6 @@ class Agent:
         return ", ".join(describe_action(a) for a in actions)
 
     @staticmethod
-    @staticmethod
     def _phrase_one(device_name: str, name, value, with_name: bool = True) -> str:
         """One action as a clause. `with_name` is off for every action after the
         first, so a two-action command does not repeat the device name."""
