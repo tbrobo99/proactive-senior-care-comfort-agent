@@ -53,7 +53,35 @@ CREATE TABLE IF NOT EXISTS logs (
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_next ON jobs(enabled, next_run_at);
+
+-- FR-6: the structured, append-only audit trail. `logs` above is free text
+-- for debugging; this table is the record that links a risk to the question
+-- it raised, the answer it got, and what the device actually did.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT NOT NULL,      -- timezone-aware ISO 8601
+    event_type       TEXT NOT NULL,      -- risk.triggered, approval.proposed, ...
+    risk_kind        TEXT,
+    risk_score       REAL,
+    action_kind      TEXT,
+    tier             TEXT,
+    approval_id      TEXT,
+    approval_status  TEXT,
+    execution_status TEXT,               -- requested | completed | failed | canceled
+    decision_source  TEXT,               -- rules | llm | user | timeout | interlock
+    channel          TEXT,               -- ui | api | engine
+    detail           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_approval ON audit_log(approval_id);
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 """
+
+AUDIT_FIELDS = ("risk_kind", "risk_score", "action_kind", "tier", "approval_id",
+                "approval_status", "execution_status", "decision_source",
+                "channel", "detail")
 
 
 @contextmanager
@@ -211,4 +239,37 @@ def recent_logs(limit: int = 50) -> list[dict]:
         rows = c.execute(
             "SELECT * FROM logs ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------- audit trail (FR-6) ----------------
+
+def audit(event_type: str, **fields) -> int:
+    """Append one row to the audit trail and return its id.
+
+    Raises on failure, on purpose: the caller decides what a lost record means.
+    Before a Level 2 action it means the action does not run (write-before-act).
+    """
+    unknown = set(fields) - set(AUDIT_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown audit fields: {sorted(unknown)}")
+    cols = ["ts", "event_type"] + list(fields)
+    vals = [datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            event_type] + list(fields.values())
+    with _lock, conn() as c:
+        cur = c.execute(
+            f"INSERT INTO audit_log ({', '.join(cols)}) VALUES "
+            f"({', '.join('?' * len(cols))})", vals)
+        return int(cur.lastrowid)
+
+
+def recent_audit(limit: int = 100, approval_id: str | None = None) -> list[dict]:
+    sql, args = "SELECT * FROM audit_log", []
+    if approval_id:
+        sql += " WHERE approval_id=?"
+        args.append(approval_id)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _lock, conn() as c:
+        rows = c.execute(sql, args).fetchall()
     return [dict(r) for r in rows]

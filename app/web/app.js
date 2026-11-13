@@ -354,12 +354,16 @@ async function answer(yes) {
   if (askBusy || !askId) return;
   askBusy = true;
   try {
-    const res = await api(`/api/approvals/${askId}/${yes ? "confirm" : "decline"}`, { method: "POST" });
+    const res = await api(`/api/approvals/${askId}/${yes ? "confirm" : "decline"}`,
+                          { method: "POST", body: JSON.stringify({ channel: "ui" }) });
     // The house reports `expired` when the deadline passed while the answer
     // was in flight. Saying "Done." there would be a lie about the devices,
-    // and this is the one screen where a lie matters.
+    // and this is the one screen where a lie matters. `status` is what the
+    // device actually did after revalidation (completed / canceled / failed).
     if (res && res.expired) toast("Too late — nothing was changed.");
     else if (res && res.ok === false) toast("That request had already closed.");
+    else if (yes && res && res.status === "canceled") toast("Not needed any more — nothing was changed.");
+    else if (yes && res && res.status === "failed") toast("The appliance did not respond — nothing was changed.");
     else toast(yes ? "Done." : "Nothing changed.");
     await refresh();
     loadMessages().catch(() => {});

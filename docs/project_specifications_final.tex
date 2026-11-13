@@ -166,7 +166,7 @@ Write Intent $\rightarrow$ Execute Adapter $\rightarrow$ Log Outcome $\rightarro
 \subsection{FR-1: Real-Time Environmental \& Power Telemetry Perception}
 The \texttt{SensorSimulator} class in \texttt{app/sensors.py} generates 1~Hz time-series IoT telemetry snapshots.
 \begin{itemize}
-    \item \textbf{Data Pipeline:} Telemetry is persisted to \texttt{data/sensors/MRI\_TOI\_log.jsonl} and \texttt{sensor\_history.csv}.
+    \item \textbf{Data Pipeline:} Every snapshot is appended to \texttt{data/sensors/readings.jsonl}, and the latest readings are rewritten to \texttt{data/sensors/latest.csv}.
     \item \textbf{Simulated Metrics:} Room temperatures ($^\circ$C), relative humidity (\%), drum moisture decay, appliance door contact, household presence (\texttt{user\_home}), refrigerator compressor duty cycle, and active power draw (W).
 \end{itemize}
 
@@ -223,7 +223,7 @@ L2 & \texttt{preheat\_cooktop} & Cooktop on early \\
 \subsection{FR-5: Fail-Safe Default Policy}
 \begin{itemize}
     \item \textbf{300-Second Expiry \& Safe Standby:} Level 2 confirmation requests expire after 300 seconds (\texttt{APPROVAL\_TTL\_SECONDS}). Decline, expiry, late responses, or system restarts never execute pending Level 2 actions and initiate a 1,800-second (30-minute) quiet period for that risk kind.
-    \item \textbf{Pre-Execution Revalidation \& Cooktop Safeguards:} Upon confirmation within 300 seconds, the engine re-verifies approval validity, active risk conditions, device state, and safety interlocks immediately before calling the device adapter. For \texttt{preheat\_cooktop}, execution requires verified household presence (\texttt{user\_home}), an automatic shut-off timer if cooking is not detected (preventing wasted energy and fire hazards), and a maximum continuous run-time limit.
+    \item \textbf{Pre-Execution Revalidation \& Cooktop Safeguards:} Upon confirmation within 300 seconds, the engine re-verifies approval validity, active risk conditions, device state, and safety interlocks immediately before calling the device adapter. Because \texttt{preheat\_cooktop} prepares a scheduled meal rather than relieving the overload, it is revalidated against the meal instead of the risk score: execution requires verified household presence (\texttt{user\_home}), a cooking session still scheduled within 30 minutes, and the cooktop still off. After execution, an automatic shut-off interlock switches the cooktop off if cooking is not detected within 10 minutes of the scheduled start (preventing wasted energy and fire hazards), and in any case after a 90-minute maximum continuous run time.
     \item \textbf{Follow-Up Notification:} When \texttt{stop\_dryer} interrupts a cycle to relieve thermal and electrical overload, the system notifies the user once the risk clears so they can restart the dryer manually.
 \end{itemize}
 

@@ -26,19 +26,41 @@ class Approval:
     risk_kind: str
     question: str                 # what the user is asked, in plain language
     summary: str                  # one-line audit line
+    # One Level 2 action per approval (FR-3/FR-4: per-action consent). The
+    # list shape is kept so callers and the UI read it the same way, but it
+    # always holds exactly one candidate.
     actions: list = field(default_factory=list)   # Candidate dicts
     created_at: str = ""
     expires_at: str = ""
     status: str = "pending"       # pending | confirmed | declined | expired
     decided_by: str = ""
+    risk_score: float | None = None
+    channel: str = ""             # where the answer came from (ui, api, ...)
+
+    @property
+    def action_kind(self) -> str:
+        return (self.actions[0].get("kind") if self.actions else "") or ""
 
     def to_dict(self) -> dict:
         return {
             "id": self.id, "risk_kind": self.risk_kind, "question": self.question,
             "summary": self.summary, "actions": self.actions,
+            "action_kind": self.action_kind, "risk_score": self.risk_score,
             "created_at": self.created_at, "expires_at": self.expires_at,
             "status": self.status, "decided_by": self.decided_by,
+            "channel": self.channel,
         }
+
+
+def _audit(event_type: str, ap: "Approval", **extra) -> None:
+    """Record an approval transition. A failure here is logged, not raised:
+    write-before-act is enforced where the device is touched, in the engine."""
+    try:
+        db.audit(event_type, risk_kind=ap.risk_kind, risk_score=ap.risk_score,
+                 action_kind=ap.action_kind, tier="tier2", approval_id=ap.id,
+                 approval_status=ap.status, **extra)
+    except Exception as exc:
+        db.log("audit.error", f"{event_type} {ap.id}: {exc}", "error")
 
 
 class ApprovalQueue:
@@ -55,7 +77,9 @@ class ApprovalQueue:
     # ---------------------------------------------------------------- propose
 
     def propose(self, *, risk_kind: str, question: str, summary: str,
-                actions: list, ttl_seconds: int | None = None) -> Approval:
+                actions: list, ttl_seconds: int | None = None,
+                risk_score: float | None = None,
+                decision_source: str = "rules") -> Approval:
         ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
         now = datetime.now()
         ap = Approval(
@@ -69,16 +93,20 @@ class ApprovalQueue:
             # against a microsecond `now` expires up to a second early, and a
             # fail-safe that fires early is a fail-safe that lies.
             expires_at=(now + _seconds(ttl)).isoformat(),
+            risk_score=None if risk_score is None else round(float(risk_score), 1),
         )
         with self._lock:
             self._items[ap.id] = ap
         db.log("approval.propose", f"{ap.id} {risk_kind}: {summary} (ttl {ttl}s)")
+        _audit("approval.proposed", ap, decision_source=decision_source,
+               channel="engine", detail=f"ttl {ttl}s; expires {ap.expires_at}")
         return ap
 
     # ---------------------------------------------------------------- decide
 
-    def confirm(self, approval_id: str) -> Approval | None:
+    def confirm(self, approval_id: str, channel: str = "api") -> Approval | None:
         """Mark confirmed. The caller executes the actions; this only decides."""
+        late = None
         with self._lock:
             ap = self._items.get(approval_id)
             if not ap or ap.status != "pending":
@@ -91,24 +119,34 @@ class ApprovalQueue:
             try:
                 if datetime.fromisoformat(ap.expires_at) <= datetime.now():
                     ap.status = "expired"
+                    ap.channel = channel
                     self._late[approval_id] = ap
-                    db.log("approval.expired",
-                           f"{approval_id} {ap.risk_kind}: answered after the "
-                           f"window; nothing was changed")
-                    return None
+                    late = ap
             except ValueError:
                 pass  # no deadline recorded: nothing to enforce
-            ap.status, ap.decided_by = "confirmed", "user"
+            if late is None:
+                ap.status, ap.decided_by, ap.channel = "confirmed", "user", channel
+        if late is not None:
+            db.log("approval.expired",
+                   f"{approval_id} {late.risk_kind}: answered after the "
+                   f"window; nothing was changed")
+            _audit("approval.expired", late, decision_source="timeout",
+                   channel=channel, execution_status="canceled",
+                   detail="answer arrived after the deadline")
+            return None
         db.log("approval.confirm", f"{approval_id} {ap.risk_kind}")
+        _audit("approval.confirmed", ap, decision_source="user", channel=channel)
         return ap
 
-    def decline(self, approval_id: str) -> Approval | None:
+    def decline(self, approval_id: str, channel: str = "api") -> Approval | None:
         with self._lock:
             ap = self._items.get(approval_id)
             if not ap or ap.status != "pending":
                 return None
-            ap.status, ap.decided_by = "declined", "user"
+            ap.status, ap.decided_by, ap.channel = "declined", "user", channel
         db.log("approval.decline", f"{approval_id} {ap.risk_kind}")
+        _audit("approval.declined", ap, decision_source="user", channel=channel,
+               execution_status="canceled")
         return ap
 
     # ---------------------------------------------------------------- expire
@@ -140,6 +178,9 @@ class ApprovalQueue:
         for ap in expired:
             db.log("approval.expired",
                    f"{ap.id} {ap.risk_kind}: no response within the window; nothing was changed")
+            _audit("approval.expired", ap, decision_source="timeout",
+                   channel="engine", execution_status="canceled",
+                   detail="no response within the window")
         return expired
 
     # ---------------------------------------------------------------- read

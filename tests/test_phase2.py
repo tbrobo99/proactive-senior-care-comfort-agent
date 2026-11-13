@@ -60,6 +60,11 @@ class FakeAdapter:
         return {"ok": True, "applied": actions, "error": None}
 
 
+def _ask(engine, kind):
+    """The pending approval for one Level 2 action kind."""
+    return next(a for a in engine.approvals.pending() if a.action_kind == kind)
+
+
 def _cfg(llm=None, **proactive):
     cfg = {"llm": llm or {"enabled": False},
            "proactive": {"tick_seconds": 0.05, "cooldown_seconds": 0, **proactive}}
@@ -380,17 +385,21 @@ class ProactiveNoLLMTest(Base):
         self.assertIn("power", applied.get("range_hood", []))   # hood ran
         self.assertNotIn("dryer", applied)                       # dryer untouched
         pending = e.approvals.pending()
-        self.assertEqual(len(pending), 1)
-        self.assertEqual(pending[0].risk_kind, "thermal")
-        self.assertTrue(pending[0].question)
+        # One approval per Level 2 action (FR-3/FR-4).
+        self.assertEqual({a.action_kind for a in pending}, {"stop_dryer", "preheat_cooktop"})
+        for a in pending:
+            self.assertEqual(a.risk_kind, "thermal")
+            self.assertEqual(len(a.actions), 1)
+            self.assertTrue(a.question)
 
     def test_confirmed_approval_stops_the_dryer_and_schedules_nothing(self):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = e.approvals.pending()[0]
+        ap = _ask(e, "stop_dryer")
         res = e.confirm(ap.id)
         self.assertTrue(res["ok"])
+        self.assertEqual(res["status"], "completed")
         applied = {}
         for dev, acts in self.adapter.applied:
             applied.setdefault(dev, []).extend(a["action"] for a in acts)
@@ -407,7 +416,7 @@ class ProactiveNoLLMTest(Base):
         e.approvals.ttl_seconds = 0.2
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = e.approvals.pending()[0]
+        ap = _ask(e, "stop_dryer")
         time.sleep(0.3)
         res = e.confirm(ap.id)
         self.assertFalse(res["ok"])
@@ -419,7 +428,7 @@ class ProactiveNoLLMTest(Base):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = e.approvals.pending()[0]
+        ap = _ask(e, "stop_dryer")
         self.assertTrue(e.confirm(ap.id)["ok"])
         self.assertFalse(e.confirm(ap.id)["ok"])  # already decided
         stops = [dev for dev, acts in self.adapter.applied
@@ -432,8 +441,8 @@ class ProactiveNoLLMTest(Base):
         e.sensors.apply_scenario("oven")
         e.tick()
         before = len(self.adapter.applied)
-        ap = e.approvals.pending()[0]
-        self.assertTrue(e.decline(ap.id)["ok"])
+        for ap in e.approvals.pending():
+            self.assertTrue(e.decline(ap.id)["ok"])
         self.assertEqual(len(self.adapter.applied), before)
         self.assertEqual(e.approvals.pending(), [])
         self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
@@ -473,7 +482,7 @@ class ProactiveNoLLMTest(Base):
         e.sensors.apply_scenario("oven")
         e.tick()
         e.tick()
-        self.assertEqual(len(e.approvals.pending()), 1)
+        self.assertEqual(len(e.approvals.pending()), 2)
 
     def test_cooldown_blocks_immediate_repeat(self):
         e = self._engine(_cfg(cooldown_seconds=600))
@@ -561,8 +570,8 @@ class ProactiveLLMTest(Base):
             self.assertNotIn("dryer", applied)     # a Tier-2 action never runs by itself
             self.assertNotIn("cooktop", applied)
             pending = e.approvals.pending()
-            self.assertEqual(len(pending), 1)
-            self.assertEqual({a["kind"] for a in pending[0].actions},
+            self.assertEqual(len(pending), 2)
+            self.assertEqual({a.action_kind for a in pending},
                              {"stop_dryer", "preheat_cooktop"})
 
     def test_declining_a_question_stops_the_house_asking_again(self):
@@ -575,8 +584,9 @@ class ProactiveLLMTest(Base):
             e.sensors.apply_scenario("oven")
             e.tick()
             pending = e.approvals.pending()
-            self.assertEqual(len(pending), 1)
-            e.decline(pending[0].id)
+            self.assertEqual(len(pending), 2)
+            for ap in pending:
+                e.decline(ap.id)
             remaining = e._cooldown["thermal"] - time.monotonic()
             self.assertGreater(remaining, e.cooldown_seconds)
             e.tick()

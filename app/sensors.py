@@ -104,7 +104,10 @@ class SensorSimulator:
             # must not decide about alone: a hob left on with nobody in front of
             # it is the reason Tier 2 exists (poster §II.C, "warming up
             # cooktops"). Its state is a sensor fact like any other.
-            "cooktop": {"power": False},
+            # `cooking` is the pan-detection signal: True once something is
+            # actually being cooked. The cooktop interlock switches a preheated
+            # hob off when it never becomes True.
+            "cooktop": {"power": False, "cooking": False},
             # The fridge is the kitchen's sensor node: what its external probe
             # reads and how hard its compressor works. duty_cycle is derived
             # from external_temp, exactly as the real appliance's draw tracks
@@ -273,8 +276,10 @@ class SensorSimulator:
                         w["drum_humidity"] = 60.0
                     elif name == "ventilate":
                         w["ventilating"] = bool(value)
-                elif device_id in self.appliances and name in ("power", "fan"):
+                elif device_id in self.appliances and name in ("power", "fan", "cooking"):
                     self.appliances[device_id][name] = value
+                    if device_id == "cooktop" and name == "power" and not value:
+                        self.appliances["cooktop"]["cooking"] = False
                 elif device_id == "oven" and name == "temperature":
                     self.appliances["oven"]["target_temp"] = value
 
@@ -332,7 +337,7 @@ class SensorSimulator:
                 "dehumidifier": {"power": False},
                 "range_hood": {"power": False, "fan": "auto"},
                 "purifier": {"power": False, "fan": "auto"},
-                "cooktop": {"power": False},
+                "cooktop": {"power": False, "cooking": False},
                 "fridge": {"power": True, "external_temp": 29.0, "duty_cycle": 0.35},
             }
             self.ac_targets.clear()

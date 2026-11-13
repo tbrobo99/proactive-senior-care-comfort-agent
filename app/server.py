@@ -6,7 +6,7 @@ import mimetypes
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from . import db
 
@@ -86,6 +86,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"messages": db.recent_messages(60)})
         if path == "/api/logs":
             return self._json({"logs": db.recent_logs(60)})
+        if path == "/api/audit":
+            q = parse_qs(urlparse(self.path).query)
+            return self._json({"audit": db.recent_audit(
+                100, approval_id=(q.get("approval_id") or [None])[0])})
         if path == "/api/approvals":
             # Phase 2: Tier-2 requests waiting on the user. Absent engine ->
             # empty list, never a 500.
@@ -147,7 +151,9 @@ class Handler(BaseHTTPRequestHandler):
             if engine is None:
                 return self._json({"error": "proactive engine not running"}, 400)
             fn = engine.confirm if m.group(2) == "confirm" else engine.decline
-            return self._json(fn(m.group(1)))
+            # Which surface the answer came from goes into the audit trail.
+            channel = str(body.get("channel") or "api")[:16]
+            return self._json(fn(m.group(1), channel=channel))
 
         return self._json({"error": "not found"}, 404)
 

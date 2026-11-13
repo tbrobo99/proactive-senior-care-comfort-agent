@@ -47,10 +47,28 @@ if the model is unavailable or returns unusable output, the rules decide.
 | 2 | `stop_dryer` | Dryer |
 | 2 | `preheat_cooktop` | Cooktop |
 
-Level 2 actions raised for the same risk are presented together in one approval
-request. A request expires after **300 s**; declining it or letting it expire
+Each Level 2 action gets its **own approval request** (its own id, question and
+answer). A request expires after **300 s**; declining it or letting it expire
 leaves the appliance unchanged and starts a **30-minute** quiet period.
-Stopping the dryer leaves it off — the user starts it again by hand.
+Unknown action names are blocked and recorded, never executed.
+
+Immediately before any action runs, the engine **revalidates** it: the risk is
+still active and the device is still in the expected state. `preheat_cooktop`
+is the exception: it prepares a meal rather than relieving the overload, so it
+is checked against the meal instead — someone is home, cooking is still
+scheduled within 30 minutes, and the cooktop is still off. A preheated
+cooktop is switched off automatically if no cooking is detected within 10
+minutes of the scheduled start, and after 90 minutes regardless. Stopping the
+dryer leaves it off; once the kitchen overload clears, the user is told they can
+restart it. Results are reported as they happened: `completed`, `canceled`
+(revalidation failed) or `failed` (the device did not respond).
+
+Every step is written to an append-only SQLite `audit_log` (UPDATE and DELETE
+are blocked by triggers): `risk.triggered`, `approval.proposed`,
+`approval.confirmed` / `declined` / `expired`, `action.requested`,
+`action.executed` / `failed` / `blocked`, `notify.dryer_restart`. The intent
+is recorded before the adapter call; if that write fails, a Level 2 action
+does not run.
 
 ---
 
@@ -119,8 +137,8 @@ python run.py --scenario oven
 ```
 
 TOI detects the upcoming cooking session and concurrent appliance load.
-Level 1 cooling or ventilation runs automatically; Level 2 actions appear as
-one approval request. Declining, ignoring, or answering after the deadline
+Level 1 cooling or ventilation runs automatically; each Level 2 action appears
+as its own approval request. Declining, ignoring, or answering after the deadline
 does not execute them. After a Yes, the dryer is off and the cooktop is on.
 
 Useful endpoints:
@@ -129,6 +147,8 @@ Useful endpoints:
 curl http://127.0.0.1:8848/api/proactive
 curl http://127.0.0.1:8848/api/approvals
 curl http://127.0.0.1:8848/api/logs
+curl http://127.0.0.1:8848/api/audit
+curl "http://127.0.0.1:8848/api/audit?approval_id=<id>"
 ```
 
 ### Fully offline run (recommended for a recorded walkthrough)

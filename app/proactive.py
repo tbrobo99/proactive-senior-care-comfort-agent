@@ -155,6 +155,12 @@ class ProactiveEngine:
         # clock is running against. Flip this on if a richer question is ever
         # worth the wait.
         self.llm_phrase = bool(pcfg.get("llm_phrase", False)) and llm.available(cfg)
+        # Cooktop interlock (FR-5). After a confirmed preheat, the hob is
+        # switched off by the house if no cooking is detected within the grace
+        # period after the scheduled start, and in any case after the maximum
+        # continuous run time.
+        self.cooktop_grace_seconds = float(pcfg.get("cooktop_grace_seconds", 600))
+        self.cooktop_max_run_seconds = float(pcfg.get("cooktop_max_run_seconds", 5400))
 
         self.sensors = sensors.SensorSimulator(tick_seconds=self.tick_seconds)
         self.approvals = approval.ApprovalQueue(
@@ -165,6 +171,8 @@ class ProactiveEngine:
         self._cooldown: dict[str, float] = {}     # risk kind -> monotonic deadline
         self._active: dict[str, dict] = {}        # risk kind -> last intervention
         self._last_snapshot: dict = {}
+        self._cooktop_guard: dict | None = None   # set after a confirmed preheat
+        self._dryer_reminder: dict | None = None  # set after a confirmed dryer stop
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -203,6 +211,13 @@ class ProactiveEngine:
                  if r.score >= r.threshold]
         events: list[dict] = []
 
+        ev = self._watch_cooktop(snap)
+        if ev:
+            events.append(ev)
+        ev = self._remind_dryer(snap, {r.kind for r in fired})
+        if ev:
+            events.append(ev)
+
         pending_kinds = {a.risk_kind for a in self.approvals.pending()}
         for r in fired:
             if self._cooling(r.kind):
@@ -223,6 +238,8 @@ class ProactiveEngine:
     # ---------------------------------------------------------------- intervene
 
     def _intervene(self, r: risk.Risk, snap: dict, now: datetime) -> dict:
+        _audit_safe("risk.triggered", risk_kind=r.kind, risk_score=round(r.score, 1),
+                    decision_source="rules", channel="engine", detail=r.headline)
         cands = policy.candidates(r, snap)
         if not cands:
             return {"type": "no_candidates", "risk": r.kind}
@@ -251,29 +268,46 @@ class ProactiveEngine:
 
         executed = []
         for c in tier1:
-            res = self.adapter.apply(c.device_id, c.actions)
-            self.sensors.note_action(c.device_id, c.actions)
-            ok = bool(res.get("ok"))
-            executed.append({"kind": c.kind, "label": c.label, "ok": ok,
-                             "error": res.get("error")})
-            db.log("proactive.tier1",
-                   f"{r.kind}: {c.label} -> {'ok' if ok else res.get('error')}")
+            item = _candidate_dict(c)
+            ok, why = policy.revalidate(item, snap, {r.kind: r})
+            if not ok:
+                outcome = self._block(item, why, tier=policy.TIER1, risk_kind=r.kind,
+                                      risk_score=r.score, decision_source=decided_by)
+            else:
+                outcome = self._execute(item, tier=policy.TIER1, risk_kind=r.kind,
+                                        risk_score=r.score, decision_source=decided_by,
+                                        channel="engine")
+            executed.append(outcome)
+            db.log("proactive.tier1", f"{r.kind}: {c.label} -> {outcome['status']}"
+                   + (f" ({outcome['reason']})" if outcome["reason"] else ""))
 
-        approval_id = None
-        if tier2:
-            question = self._phrase(r, tier2, snap)
+        # FR-3/FR-4: one approval per Level 2 action, each with its own id,
+        # question and answer. Confirming one never carries out another.
+        approval_ids = []
+        for c in tier2:
+            question = self._phrase(r, [c], snap)
             ap = self.approvals.propose(
                 risk_kind=r.kind,
                 question=question,
-                summary="; ".join(c.label for c in tier2),
-                actions=[_candidate_dict(c) for c in tier2],
+                summary=c.label,
+                actions=[_candidate_dict(c)],
+                risk_score=r.score,
+                decision_source=decided_by,
             )
-            approval_id = ap.id
+            approval_ids.append(ap.id)
             db.add_message("system", question, {"approval": ap.to_dict()})
+        approval_id = approval_ids[0] if approval_ids else None
 
-        done = [c.done for c in tier1]
+        # Truthful reporting (FR-4): say only what the adapter confirmed.
+        done = [o["done"] for o in executed if o["status"] == "completed"]
+        failed = [o for o in executed if o["status"] == "failed"]
         head = _plain(r, snap)
-        if done:
+        if failed:
+            tail = " ".join(f"I tried to {o['label']}, but {o['device_name']} did not "
+                            f"respond." for o in failed)
+            body = (f"\U0001f6e1 {head}. "
+                    + (f"So I {_join(done)}. " if done else "") + tail)
+        elif done:
             body = f"\U0001f6e1 {head}. So I {_join(done)}."
         elif tier2:
             body = (f"\U0001f6e1 {head}. Changing that moves your plans, "
@@ -286,16 +320,125 @@ class ProactiveEngine:
             # spec and the audit trail need the number, the user does not.
             "headline": r.headline,
             "decided_by": decided_by, "approval": approval_id,
-            "executed": executed,
+            "approvals": approval_ids, "executed": executed,
         })
 
         self._cooldown[r.kind] = time.monotonic() + self.cooldown_seconds
         self._active[r.kind] = {"score": r.score, "at": now.isoformat(timespec="seconds"),
-                                "executed": [c.kind for c in tier1],
-                                "approval": approval_id}
+                                "executed": [o["kind"] for o in executed
+                                             if o["status"] == "completed"],
+                                "approval": approval_id, "approvals": approval_ids}
         return {"type": "intervened", "risk": r.kind, "decided_by": decided_by,
                 "tier1": [c.kind for c in tier1], "tier2": [c.kind for c in tier2],
-                "approval": approval_id}
+                "approval": approval_id, "approvals": approval_ids}
+
+    # ---------------------------------------------------------------- execution
+
+    def _block(self, item: dict, reason: str, *, tier: str, risk_kind: str,
+               risk_score: float | None, decision_source: str,
+               approval_id: str | None = None, channel: str = "engine") -> dict:
+        """Record an action that was not carried out, and why."""
+        _audit_safe("action.blocked", risk_kind=risk_kind,
+                    risk_score=_round(risk_score), action_kind=item.get("kind"),
+                    tier=tier, approval_id=approval_id,
+                    execution_status="canceled", decision_source=decision_source,
+                    channel=channel, detail=reason)
+        return _outcome(item, "canceled", reason)
+
+    def _execute(self, item: dict, *, tier: str, risk_kind: str,
+                 risk_score: float | None, decision_source: str, channel: str,
+                 approval_id: str | None = None) -> dict:
+        """Write intent, call the adapter, write the real outcome (FR-6).
+
+        Returns an outcome dict whose `status` is completed, failed or canceled.
+        """
+        common = dict(risk_kind=risk_kind, risk_score=_round(risk_score),
+                      action_kind=item.get("kind"), tier=tier,
+                      approval_id=approval_id, decision_source=decision_source,
+                      channel=channel)
+        if not policy.is_whitelisted(item.get("kind") or "") and tier != "interlock":
+            return self._block(item, "not on the action whitelist", tier=tier,
+                               risk_kind=risk_kind, risk_score=risk_score,
+                               decision_source=decision_source,
+                               approval_id=approval_id, channel=channel)
+        # Write-before-act. For Level 2 a missing record means no action.
+        try:
+            db.audit("action.requested", execution_status="requested",
+                     detail=json.dumps(item.get("actions"), ensure_ascii=False),
+                     **common)
+        except Exception as exc:
+            db.log("audit.error", f"action.requested {item.get('kind')}: {exc}", "error")
+            if tier == policy.TIER2:
+                return _outcome(item, "failed",
+                                "the house could not record the action, so it did not run")
+        try:
+            res = self.adapter.apply(item["device_id"], item["actions"])
+        except Exception as exc:
+            res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        ok = bool(res.get("ok"))
+        if ok:
+            self.sensors.note_action(item["device_id"], item["actions"])
+        _audit_safe("action.executed" if ok else "action.failed",
+                    execution_status="completed" if ok else "failed",
+                    detail=None if ok else str(res.get("error") or "no response"),
+                    **common)
+        return _outcome(item, "completed" if ok else "failed",
+                        "" if ok else str(res.get("error") or "no response"))
+
+    # ---------------------------------------------------------------- follow-ups (FR-5)
+
+    def _watch_cooktop(self, snap: dict) -> dict | None:
+        """Switch a preheated cooktop off when nobody cooks on it, or when it
+        has run for the maximum time. Turning heat *off* needs no approval."""
+        g = self._cooktop_guard
+        if not g:
+            return None
+        ck = snap["appliances"].get("cooktop", {})
+        if not ck.get("power"):
+            self._cooktop_guard = None      # switched off by hand: nothing to watch
+            return None
+        if ck.get("cooking"):
+            g["cooking_seen"] = True
+        mono = time.monotonic()
+        if mono >= g["max_until"]:
+            reason = "it reached the longest time it may stay on by itself"
+        elif not g.get("cooking_seen") and mono >= g["auto_off_at"]:
+            reason = "nobody started cooking on it"
+        else:
+            return None
+        self._cooktop_guard = None
+        item = {"kind": "cooktop_auto_off", "device_id": "cooktop",
+                "device_name": "Kitchen Cooktop",
+                "actions": [{"action": "power", "value": False}],
+                "label": "switch the cooktop off", "done": "switched the cooktop off"}
+        out = self._execute(item, tier="interlock", risk_kind="thermal", risk_score=None,
+                            decision_source="interlock", channel="engine",
+                            approval_id=g.get("approval_id"))
+        if out["status"] == "completed":
+            text = f"\U0001f525 I switched the cooktop off because {reason}."
+        else:
+            text = (f"⚠ I tried to switch the cooktop off because {reason}, "
+                    f"but it did not respond. Please check it.")
+        db.add_message("system", text, {"interlock": "cooktop", "executed": [out]})
+        return {"type": "cooktop_auto_off", "status": out["status"], "reason": reason}
+
+    def _remind_dryer(self, snap: dict, fired_kinds: set) -> dict | None:
+        """After a confirmed dryer stop, say once that it may be restarted,
+        when the kitchen overload has cleared."""
+        if not self._dryer_reminder or "thermal" in fired_kinds:
+            return None
+        rem, self._dryer_reminder = self._dryer_reminder, None
+        if snap["appliances"].get("dryer", {}).get("power"):
+            return None                     # already restarted by hand
+        db.add_message("system",
+                       "✅ The kitchen has cooled down. You can start the dryer "
+                       "again whenever you like — I have left it off.",
+                       {"reminder": "dryer_restart"})
+        _audit_safe("notify.dryer_restart", risk_kind="thermal", action_kind="stop_dryer",
+                    tier=policy.TIER2, approval_id=rem.get("approval_id"),
+                    decision_source="rules", channel="engine",
+                    detail="thermal risk cleared")
+        return {"type": "dryer_reminder"}
 
     # ---------------------------------------------------------------- the LLM's job
 
@@ -354,6 +497,15 @@ class ProactiveEngine:
         by_kind = {c.kind: c for c in cands}
         chosen, seen = [], set()
         for k in kinds:
+            if not policy.is_whitelisted(k):
+                # FR-3: an invented action is rejected and recorded, never run.
+                _audit_safe("action.blocked", risk_kind=r.kind,
+                            risk_score=round(r.score, 1), action_kind=k[:64],
+                            execution_status="canceled", decision_source="llm",
+                            channel="engine", detail="model returned an action "
+                                                     "outside the whitelist")
+                db.log("proactive.blocked", f"{r.kind}: model proposed unknown action {k!r}")
+                continue
             if k in by_kind and k not in seen:
                 chosen.append(by_kind[k])
                 seen.add(k)
@@ -394,9 +546,9 @@ class ProactiveEngine:
 
     # ---------------------------------------------------------------- user decisions
 
-    def confirm(self, approval_id: str) -> dict:
-        """The user said yes. Execute the Tier-2 actions now."""
-        ap = self.approvals.confirm(approval_id)
+    def confirm(self, approval_id: str, channel: str = "api") -> dict:
+        """The user said yes. Revalidate, then execute this one Tier-2 action."""
+        ap = self.approvals.confirm(approval_id, channel=channel)
         if not ap:
             # Two ways to get here, and they are not the same thing. Either
             # there is no such approval, or there was one and this answer
@@ -413,26 +565,61 @@ class ProactiveEngine:
                            f"nothing. {_devices(late)} are as they were.",
                            {"approval": late.to_dict()})
             return {"ok": False, "expired": True, "approval": late.to_dict()}
+        # Pre-execution revalidation (FR-5): the yes was given to the situation
+        # the question described. If that situation is gone, nothing runs.
+        snap = self.sensors.snapshot()
+        active = {r.kind: r for r in risk.evaluate(snap, self.sensors.history)
+                  if r.score >= r.threshold}
         executed = []
         for item in ap.actions:
-            res = self.adapter.apply(item["device_id"], item["actions"])
-            self.sensors.note_action(item["device_id"], item["actions"])
-            executed.append({"device_id": item["device_id"], "ok": bool(res.get("ok")),
-                             "error": res.get("error")})
+            ok, why = policy.revalidate(item, snap, active)
+            if not ok:
+                executed.append(self._block(item, why, tier=policy.TIER2,
+                                            risk_kind=ap.risk_kind,
+                                            risk_score=ap.risk_score,
+                                            decision_source="user",
+                                            approval_id=ap.id, channel=channel))
+                continue
+            out = self._execute(item, tier=policy.TIER2, risk_kind=ap.risk_kind,
+                                risk_score=ap.risk_score, decision_source="user",
+                                channel=channel, approval_id=ap.id)
+            executed.append(out)
+            if out["status"] == "completed":
+                self._arm_follow_ups(item, ap, snap)
         # No job is created here. An approval authorises the action that was
         # asked about, at the moment it is given; it is not a standing
-        # permission for the same device to start again hours later. A
-        # candidate that did carry a `job` would be a second decision the user
-        # never saw.
-        done = _join([it.get("done") or it.get("label") or it.get("device_id", "")
-                      for it in ap.actions])
-        db.add_message("system",
-                       f"\u2713 You said yes, so I {done}.",
-                       {"approval": ap.to_dict(), "executed": executed})
-        return {"ok": True, "approval": ap.to_dict(), "executed": executed}
+        # permission for the same device to start again hours later.
+        status = executed[0]["status"] if executed else "canceled"
+        o = executed[0] if executed else {"label": "", "device_name": "", "reason": ""}
+        if status == "completed":
+            text = f"\u2713 You said yes, so I {o['done']}."
+        elif status == "canceled":
+            text = (f"You said yes, but I did not go ahead: {o['reason']}. "
+                    f"Nothing was changed.")
+        else:
+            text = (f"\u26a0 You said yes, but {o['device_name']} did not respond, "
+                    f"so it is unchanged.")
+        db.add_message("system", text, {"approval": ap.to_dict(), "executed": executed,
+                                        "status": status})
+        # `ok` means the answer was accepted; `status` is what the device did.
+        return {"ok": True, "status": status, "approval": ap.to_dict(),
+                "executed": executed}
 
-    def decline(self, approval_id: str) -> dict:
-        ap = self.approvals.decline(approval_id)
+    def _arm_follow_ups(self, item: dict, ap, snap: dict) -> None:
+        if item.get("kind") == "stop_dryer":
+            self._dryer_reminder = {"approval_id": ap.id}
+        elif item.get("kind") == "preheat_cooktop":
+            cooking_in = policy.cooking_starts_in_min(snap) or 0
+            mono = time.monotonic()
+            self._cooktop_guard = {
+                "approval_id": ap.id,
+                "auto_off_at": mono + float(cooking_in) * 60 + self.cooktop_grace_seconds,
+                "max_until": mono + self.cooktop_max_run_seconds,
+                "cooking_seen": False,
+            }
+
+    def decline(self, approval_id: str, channel: str = "api") -> dict:
+        ap = self.approvals.decline(approval_id, channel=channel)
         if not ap:
             return {"ok": False, "error": "no pending approval with that id"}
         # No is an answer. Asking again in three minutes is not respect, it is
@@ -459,9 +646,33 @@ class ProactiveEngine:
             "occupancy": self._last_snapshot.get("occupancy"),
             "active": self._active,
             "pending_approvals": [a.to_dict() for a in self.approvals.pending()],
+            # FR-4: the quiet periods are visible, so the user can still see
+            # the live risk state while the house is not asking.
+            "quiet": {k: round(until - time.monotonic())
+                      for k, until in self._cooldown.items()
+                      if until > time.monotonic()},
+            "cooktop_guard": bool(self._cooktop_guard),
         }
 
 
 def _candidate_dict(c) -> dict:
     return {"kind": c.kind, "device_id": c.device_id, "device_name": c.device_name,
             "actions": c.actions, "label": c.label, "done": c.done}
+
+
+def _outcome(item: dict, status: str, reason: str) -> dict:
+    return {"kind": item.get("kind"), "device_id": item.get("device_id"),
+            "device_name": item.get("device_name") or item.get("device_id") or "the appliance",
+            "label": item.get("label") or "", "done": item.get("done") or item.get("label") or "",
+            "status": status, "ok": status == "completed", "reason": reason}
+
+
+def _round(v):
+    return None if v is None else round(float(v), 1)
+
+
+def _audit_safe(event_type: str, **fields) -> None:
+    try:
+        db.audit(event_type, **fields)
+    except Exception as exc:
+        db.log("audit.error", f"{event_type}: {exc}", "error")

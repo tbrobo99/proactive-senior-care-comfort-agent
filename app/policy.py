@@ -24,6 +24,7 @@ order it defends. Rules propose; the agent disposes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 TIER1 = "tier1"
 TIER2 = "tier2"
@@ -73,6 +74,86 @@ class Candidate:
 
 def tier_of(kind: str) -> str:
     return ACTION_TIERS.get(kind, TIER2)  # unknown kinds default to the safe tier
+
+
+def is_whitelisted(kind: str) -> bool:
+    """FR-3: an action outside the table is blocked and logged, never executed."""
+    return kind in ACTION_TIERS
+
+
+# Which risk each action answers. Revalidation checks that risk is still active.
+ACTION_RISK: dict[str, str] = {
+    "ventilate_washer": "mold",
+    "dehumidifier_on": "mold",
+    "purifier_on": "mold",
+    "ventilate_kitchen": "thermal",
+    "precool_kitchen": "thermal",
+    "stop_dryer": "thermal",
+    "preheat_cooktop": "thermal",
+}
+
+
+def revalidate(item: dict, snapshot: dict, active: dict) -> tuple[bool, str]:
+    """FR-5: check, immediately before the adapter call, that an action still
+    makes sense. `item` is a candidate dict, `active` maps risk kind -> Risk for
+    every risk currently at or above its threshold.
+
+    Returns (ok, reason). The reason is plain language: it is shown to the user
+    when a confirmed action is not carried out.
+    """
+    kind = item.get("kind") or ""
+    if not is_whitelisted(kind):
+        return False, "that action is not on the list the house may perform"
+    if kind == "preheat_cooktop":
+        # Preheating prepares a meal; it does not relieve the overload. So it
+        # is not tied to the thermal index still being high (stopping the
+        # dryer alone usually clears it) — only to the meal, the person and
+        # the cooktop itself.
+        if snapshot.get("appliances", {}).get("cooktop", {}).get("power"):
+            return False, "the cooktop is already on"
+        if not snapshot.get("occupancy", {}).get("user_home"):
+            return False, "nobody is home to watch the cooktop"
+        if cooking_starts_in_min(snapshot) is None:
+            return False, "there is no cooking on the calendar any more"
+        return True, ""
+    rk = ACTION_RISK.get(kind)
+    if rk not in active:
+        what = "the washer is no longer at risk of mould" if rk == "mold" \
+            else "the kitchen is no longer overheating"
+        return False, what
+
+    ap = snapshot.get("appliances", {})
+    if kind == "ventilate_washer" and ap.get("washer", {}).get("ventilating"):
+        return False, "the washer is already being aired"
+    if kind == "dehumidifier_on" and ap.get("dehumidifier", {}).get("power"):
+        return False, "the dehumidifier is already on"
+    if kind == "purifier_on" and ap.get("purifier", {}).get("power"):
+        return False, "the air purifier is already on"
+    if kind == "ventilate_kitchen" and ap.get("range_hood", {}).get("power"):
+        return False, "the range hood is already on"
+    if kind == "precool_kitchen" and \
+            (snapshot.get("ac_targets") or {}).get("Kitchen", {}).get("power"):
+        return False, "the kitchen air conditioner is already on"
+    if kind == "stop_dryer" and not ap.get("dryer", {}).get("power"):
+        return False, "the dryer is already off"
+    return True, ""
+
+
+def cooking_starts_in_min(snapshot: dict, now: datetime | None = None,
+                          lookahead_min: float = 30) -> float | None:
+    """Minutes until the soonest calendar entry starting within the lookahead
+    window (the same window the thermal index uses), or None."""
+    now = now or datetime.now()
+    soonest = None
+    for entry in snapshot.get("calendar") or []:
+        try:
+            start = datetime.fromisoformat(entry["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        delta = (start - now).total_seconds() / 60.0
+        if 0 <= delta <= lookahead_min and (soonest is None or delta < soonest):
+            soonest = delta
+    return soonest
 
 
 def candidates(risk, snapshot: dict) -> list[Candidate]:
