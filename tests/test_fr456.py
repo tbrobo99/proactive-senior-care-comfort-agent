@@ -252,6 +252,78 @@ class FR456Test(unittest.TestCase):
         self.assertFalse(e._pending_dryer_reminder)
         self.assertNotIn("dryer_restart_reminder", str(db.recent_messages()))
 
+    # ------------------------------------------- cooktop preheat after the dryer
+
+    def _cool_kitchen(self, e):
+        with e.sensors._lock:
+            e.sensors.rooms["Kitchen"]["temp"] = 25.0
+            e.sensors.appliances["fridge"]["duty_cycle"] = 0.3
+
+    def test_preheat_still_runs_after_the_dryer_stop_clears_the_overload(self):
+        """Stopping the dryer usually takes the thermal index below 50 by
+        itself. Preheating prepares the meal, so it must not depend on it."""
+        e = self._engine()
+        cards = self._oven(e)
+        self.assertTrue(e.confirm(cards["stop_dryer"].id)["ok"])
+        self._cool_kitchen(e)
+        res = e.confirm(cards["preheat_cooktop"].id)
+        self.assertTrue(res["ok"], res)
+        self.assertIn("cooktop", {dev for dev, _ in self.adapter.applied})
+
+    def test_preheat_is_refused_once_the_meal_is_off_the_calendar(self):
+        e = self._engine()
+        ap = self._oven(e)["preheat_cooktop"]
+        e.sensors.calendar = []
+        res = e.confirm(ap.id)
+        self.assertFalse(res["ok"])
+        self.assertIn("no cooking on the calendar", res["reason"])
+        self.assertNotIn("cooktop", {dev for dev, _ in self.adapter.applied})
+
+    def test_a_preheated_cooktop_waits_for_the_scheduled_meal(self):
+        """The no-cooking timer starts at the scheduled start, not when the
+        cooktop came on twenty minutes early."""
+        e = self._engine(cooktop_no_cook_timeout=60, cooktop_max_runtime=9999)
+        ap = self._oven(e)["preheat_cooktop"]
+        self.assertTrue(e.confirm(ap.id)["ok"])
+        e._cooktop_on_since -= 600     # ten minutes ago, meal still ahead
+        e.tick()
+        self.assertTrue(e.sensors.snapshot()["appliances"]["cooktop"]["power"])
+
+    # ------------------------------------------------------------ FR-3 / FR-4
+
+    def test_an_action_name_invented_by_the_model_is_blocked_and_recorded(self):
+        from tests.fake_llm import FakeLLM
+        with FakeLLM() as fake:
+            fake.prose_reply = '{"chosen": ["open_front_door", "ventilate_washer"]}'
+            cfg = _cfg(llm={"enabled": True, "base_url": fake.base_url,
+                            "api_key": "k", "model": "m", "timeout": 5})
+            e = ProactiveEngine(self.adapter, cfg)
+            e.sensors.write_files = False
+            e.sensors.apply_scenario("mold")
+            e.tick()
+        blocked = [r["action_kind"] for r in self._events("action.blocked")]
+        self.assertIn("open_front_door", blocked)
+        self.assertIn("washer", {dev for dev, _ in self.adapter.applied})
+
+    def test_a_failed_level_1_action_is_not_reported_as_done(self):
+        def fail(device_id, actions):
+            self.adapter.applied.append((device_id, actions))
+            return {"ok": False, "applied": [], "error": "device offline"}
+        self.adapter.apply = fail
+        e = self._engine()
+        e.sensors.apply_scenario("mold")
+        e.tick()
+        body = [m["content"] for m in db.recent_messages()
+                if m["role"] == "system" and "washing machine" in m["content"]][-1]
+        self.assertIn("did not respond", body)
+        self.assertNotIn("So I started", body)
+
+    def test_quiet_periods_are_visible_in_state(self):
+        e = self._engine()
+        for ap in self._oven(e).values():
+            e.decline(ap.id)
+        self.assertGreater(e.state()["quiet"].get("thermal", 0), 1700)
+
 
 if __name__ == "__main__":
     unittest.main()

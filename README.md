@@ -57,9 +57,11 @@ period for that risk.
 Before a confirmed action reaches a device, the engine re-checks the approval,
 the live risk, the device state and the safety interlocks against a fresh
 sensor snapshot. If they no longer hold, the action is refused with a visible
-reason and an `action.blocked` row. Preheating the cooktop additionally needs
-`user_home` and switches itself off if no cooking starts or its maximum run
-time is reached. Stopping the dryer leaves it off: once the risk clears, the
+reason and an `action.blocked` row. Preheating the cooktop is checked against
+the meal rather than the risk score (stopping the dryer usually clears the
+thermal index on its own): it needs `user_home` and a cooking session still
+scheduled within 30 minutes, and it switches itself off if no cooking starts
+after the scheduled time or its maximum run time is reached. Stopping the dryer leaves it off: once the risk clears, the
 house sends one reminder and the user restarts it by hand — it is never
 restarted automatically.
 

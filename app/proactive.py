@@ -343,9 +343,18 @@ class ProactiveEngine:
                 "approval": self.approvals.get(approval_ids[0]).to_dict(),
             })
 
-        done = [c.done for c in tier1]
+        # FR-4: report only what the adapter confirmed. A failed call is said
+        # out loud; a blocked one (state changed) is simply not claimed.
+        done = [c.done for c, e in zip(tier1, executed) if e.get("ok")]
+        failed = [c for c, e in zip(tier1, executed)
+                  if not e.get("ok") and not e.get("blocked")]
         head = _plain(r, snap)
-        if done:
+        if failed:
+            tail = " ".join(f"I tried to {c.label}, but {c.device_name} did not "
+                            f"respond." for c in failed)
+            body = (f"\U0001f6e1 {head}. "
+                    + (f"So I {_join(done)}. " if done else "") + tail)
+        elif done:
             body = f"\U0001f6e1 {head}. So I {_join(done)}."
         elif tier2:
             body = (f"\U0001f6e1 {head}. Changing that moves your plans, "
@@ -429,6 +438,17 @@ class ProactiveEngine:
         by_kind = {c.kind: c for c in cands}
         chosen, seen = [], set()
         for k in kinds:
+            if k not in policy.ACTION_TIERS:
+                # FR-3: a name the model invented is rejected and recorded.
+                audit.blocked("model returned an action outside the whitelist",
+                              context={"risk_kind": r.kind,
+                                       "risk_score": round(r.score, 1),
+                                       "action_kind": k[:64],
+                                       "decision_source": "llm",
+                                       "channel": "engine"})
+                db.log("proactive.blocked",
+                       f"{r.kind}: model proposed unknown action {k!r}")
+                continue
             if k in by_kind and k not in seen:
                 chosen.append(by_kind[k])
                 seen.add(k)
@@ -598,18 +618,28 @@ class ProactiveEngine:
         if policy.tier_of(kind) != policy.TIER2:
             return False, "that action is not a Level 2 action"
 
-        # 3. The risk is still active, recomputed from the fresh snapshot.
-        active = [x for x in risk.evaluate(snap, self.sensors.history, now)
-                  if x.kind == ap.risk_kind and x.score >= x.threshold]
-        if not active:
-            return False, "the risk is no longer active"
+        # 3. The reason for the action still holds, recomputed from the fresh
+        #    snapshot. Preheating the cooktop prepares a meal; it does not
+        #    relieve the overload, and stopping the dryer alone usually clears
+        #    the thermal index. Tying it to the index would cancel every
+        #    preheat that follows a dryer stop, so it is checked against the
+        #    meal instead.
+        active = []
+        if kind == "preheat_cooktop":
+            if _cooking_starts_in_min(snap, now) is None:
+                return False, "there is no cooking on the calendar any more"
+        else:
+            active = [x for x in risk.evaluate(snap, self.sensors.history, now)
+                      if x.kind == ap.risk_kind and x.score >= x.threshold]
+            if not active:
+                return False, "the risk is no longer active"
 
         # 4. The device is still in the state the question described.
         state = _device_state(snap, item.get("device_id", ""))
         if ("power" in ap.proposed_state
                 and state.get("power") != ap.proposed_state["power"]):
             return False, "the device state changed since you were asked"
-        if kind not in {c.kind for c in policy.candidates(active[0], snap)}:
+        if active and kind not in {c.kind for c in policy.candidates(active[0], snap)}:
             return False, "the action is no longer needed"
 
         # 5. Safety interlocks. A hob with nobody in the house is exactly the
@@ -651,7 +681,11 @@ class ProactiveEngine:
         clock = time.monotonic()
         if self._cooktop_on_since is None:
             self._cooktop_on_since = clock
-        if self._cooking_detected(snap, now):
+        # A meal that is still coming counts as cooking for the idle timer:
+        # the cooktop was preheated *for* it, so the no-cooking countdown
+        # starts at the scheduled start, not when the cooktop came on.
+        if (self._cooking_detected(snap, now)
+                or _cooking_starts_in_min(snap, now) is not None):
             self._cooktop_last_cooking = clock
         since_on = clock - self._cooktop_on_since
         since_cook = clock - (self._cooktop_last_cooking
@@ -736,7 +770,28 @@ class ProactiveEngine:
             "occupancy": self._last_snapshot.get("occupancy"),
             "active": self._active,
             "pending_approvals": [a.to_dict() for a in self.approvals.pending()],
+            # FR-4: quiet periods are visible (risk kind -> seconds left), so
+            # the user can see why the house is not asking.
+            "quiet": {k: round(until - time.monotonic())
+                      for k, until in self._cooldown.items()
+                      if until > time.monotonic()},
         }
+
+
+def _cooking_starts_in_min(snap: dict, now: datetime | None = None) -> float | None:
+    """Minutes until the soonest calendar entry starting within the thermal
+    index's lookahead window, or None when no meal is coming."""
+    now = now or datetime.now()
+    soonest = None
+    for entry in snap.get("calendar") or []:
+        try:
+            start = datetime.fromisoformat(entry["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        delta = (start - now).total_seconds() / 60.0
+        if 0 <= delta <= risk.CALENDAR_LOOKAHEAD_MIN and (soonest is None or delta < soonest):
+            soonest = delta
+    return soonest
 
 
 def _candidate_dict(c) -> dict:
