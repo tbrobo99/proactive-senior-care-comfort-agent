@@ -172,6 +172,7 @@ class ProactiveEngine:
         self._thread: threading.Thread | None = None
         self._cooldown: dict[str, float] = {}     # risk kind -> monotonic deadline
         self._active: dict[str, dict] = {}        # risk kind -> last intervention
+        self._last_risks: list = []               # every evaluated risk, last tick
         self._last_snapshot: dict = {}
         self._logged_risks: set[str] = set()      # de-duplicate risk.triggered rows
         self._cooktop_on_since: float | None = None
@@ -211,10 +212,17 @@ class ProactiveEngine:
         self.sensors.record(snap)
         self._last_snapshot = snap
 
-        fired = [r for r in risk.evaluate(snap, self.sensors.history, now)
-                 if r.score >= r.threshold]
+        evaluated = risk.evaluate(snap, self.sensors.history, now)
+        self._last_risks = evaluated            # live scores for the dashboard
+        fired = [r for r in evaluated if r.score >= r.threshold]
         events: list[dict] = []
         fired_kinds = {r.kind for r in fired}
+        # `_active` describes what the house is doing about a risk *now*. Once
+        # the risk clears it must go, or the status line keeps reporting an
+        # overload that ended minutes ago (FR-4 truthful reporting).
+        for kind in list(self._active):
+            if kind not in fired_kinds:
+                del self._active[kind]
 
         # FR-6: one `risk.triggered` row when a risk crosses its threshold, not
         # one per second for as long as it lasts. The set is cleared when the
@@ -775,7 +783,67 @@ class ProactiveEngine:
             "quiet": {k: round(until - time.monotonic())
                       for k, until in self._cooldown.items()
                       if until > time.monotonic()},
+            # Live index values, including those below the threshold, for the
+            # dashboard. A kind with nothing to score is reported as 0.
+            "risks": self._risk_view(),
+            "heat_load_w": self._last_snapshot.get("heat_load_w", 0),
+            "cooktop_guard": self._cooktop_view(),
         }
+
+    def _risk_view(self) -> dict:
+        thresholds = {"mold": risk.MOLD_THRESHOLD, "thermal": risk.THERMAL_THRESHOLD}
+        out = {k: {"kind": k, "score": 0.0, "threshold": t, "current": None,
+                   "predicted": None, "drivers": {}, "firing": False}
+               for k, t in thresholds.items()}
+        for r in self._last_risks:
+            out[r.kind] = {"kind": r.kind, "score": round(r.score, 1),
+                           "threshold": r.threshold, "metric": r.metric,
+                           "current": round(r.current, 1),
+                           "predicted": round(r.predicted, 1),
+                           "drivers": r.drivers, "headline": r.headline,
+                           "firing": r.score >= r.threshold}
+        return out
+
+    def _cooktop_view(self) -> dict | None:
+        """Seconds until each cooktop interlock fires, while it is armed."""
+        if self._cooktop_on_since is None:
+            return None
+        clock = time.monotonic()
+        since_cook = clock - (self._cooktop_last_cooking
+                              if self._cooktop_last_cooking is not None
+                              else self._cooktop_on_since)
+        snap = self._last_snapshot or {}
+        return {
+            "max_off_in": max(0, round(self.cooktop_max_runtime
+                                       - (clock - self._cooktop_on_since))),
+            "idle_off_in": max(0, round(self.cooktop_no_cook_timeout - since_cook)),
+            "meal_in_min": _cooking_starts_in_min(snap),
+            "cooking": self._cooking_detected(snap, datetime.now()) if snap else False,
+        }
+
+    def reset_scenario(self, name: str) -> None:
+        """Demo control: load a scenario and start the engine's memory fresh.
+
+        Open questions from the previous scenario are closed as expired —
+        nothing they asked about is executed — and every quiet period,
+        reminder and interlock timer is cleared.
+        """
+        self.approvals.close_all("scenario reset")
+        self.sensors.apply_scenario(name)
+        self._cooldown.clear()
+        self._active.clear()
+        self._logged_risks.clear()
+        self._last_risks = []
+        self._cooktop_on_since = None
+        self._cooktop_last_cooking = None
+        self._pending_dryer_reminder = False
+        try:
+            audit.record("scenario.reset", decision_source="user", channel="demo",
+                         detail=name)
+        except Exception as exc:
+            db.log("audit.write_failed", f"scenario.reset: {exc}", "error")
+        db.add_message("system", f"Demo: loaded the “{name}” scenario.",
+                       {"scenario": name})
 
 
 def _cooking_starts_in_min(snap: dict, now: datetime | None = None) -> float | None:

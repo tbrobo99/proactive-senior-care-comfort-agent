@@ -148,6 +148,18 @@ class Handler(BaseHTTPRequestHandler):
             db.clear_messages()
             return self._json({"ok": True})
 
+        if path == "/api/scenario":
+            # Demo control: load a deterministic starting state without a
+            # restart. Only the scenarios run.py also accepts.
+            engine = getattr(self.agent_ref, "proactive", None)
+            name = str(body.get("name") or "")
+            if engine is None:
+                return self._json({"error": "proactive engine not running"}, 400)
+            if name not in ("idle", "mold", "oven", "oven_running"):
+                return self._json({"error": "unknown scenario"}, 400)
+            engine.reset_scenario(name)
+            return self._json({"ok": True, "scenario": name})
+
         m = re.fullmatch(r"/api/approvals/([A-Za-z0-9_]+)/(confirm|decline)", path)
         if m:
             # The only door into Tier-2 execution. No approval id, no action —

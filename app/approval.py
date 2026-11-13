@@ -185,6 +185,17 @@ class ApprovalQueue:
         with self._lock:
             return self._late.pop(approval_id, None)
 
+    def close_all(self, reason: str) -> list[Approval]:
+        """Close every pending request as expired, executing nothing (demo reset)."""
+        with self._lock:
+            closed = [a for a in self._items.values() if a.status == "pending"]
+            for ap in closed:
+                ap.status = "expired"
+        for ap in closed:
+            _audit("approval.expired", ap, device_id=_device_of(ap),
+                   detail=f"{reason}; nothing executed")
+        return closed
+
     def expire_due(self, now: datetime | None = None) -> list[Approval]:
         """Close everything past its deadline. Nothing is executed; that is the point."""
         now = now or datetime.now()

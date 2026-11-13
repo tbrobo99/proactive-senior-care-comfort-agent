@@ -302,14 +302,15 @@ function houseStatus() {
                : `The house is waiting for ${pending.length} answers.`,
              detail: "Each question has its own Yes / No — silence changes nothing." };
   }
-  const active = (pro && pro.active) || {};
-  if (active.mold) {
-    return { tone: "ok", line: "The washer is being aired.",
-             detail: `Mold risk ${Math.round(active.mold.score)}/100 — handled on its own.` };
-  }
-  if (active.thermal) {
-    return { tone: "ok", line: "The kitchen exhaust is on.",
-             detail: `Thermal overload ${Math.round(active.thermal.score)}/100 — heat is being cleared.` };
+  // Live scores, not the last intervention: a risk that cleared minutes ago
+  // must not still be reported as happening (FR-4).
+  const risks = (pro && pro.risks) || {};
+  const firing = Object.values(risks).filter((r) => r.firing);
+  if (firing.length) {
+    const names = firing.map((r) => RISK_TEXT[r.kind].short);
+    return { tone: "watch",
+             line: `The house is handling ${names.join(" and ")}.`,
+             detail: "Small fixes run on their own; anything bigger is asked first." };
   }
   return { tone: "ok", line: "Everything is fine.", detail: "No risks to deal with." };
 }
@@ -330,12 +331,11 @@ function renderAsk() {
   if (sig !== askSig) {
     askSig = sig;
     box.innerHTML = list.map((ap, i) => {
-      const kind = ap.action_kind || (ap.actions && ap.actions[0] && ap.actions[0].kind) || "action";
       return `
-        <div class="ask" data-ask="${esc(ap.id)}">
+        <div class="ask" data-ask="${esc(ap.id)}" role="group" aria-label="Question ${i + 1} of ${list.length}">
           <p class="ask-kicker">The house is asking
             <span class="ask-index">${i + 1} of ${list.length}</span></p>
-          <p class="ask-action">${esc(kind)} · id ${esc(ap.id)}</p>
+          <p class="ask-action">${esc(askDevice(ap))}<span class="ask-id">request ${esc(ap.id)}</span></p>
           <p class="ask-question">${esc(ap.question || ap.summary || "")}</p>
           <div class="ask-answers">
             <button class="answer yes" data-answer="yes" data-id="${esc(ap.id)}">
@@ -367,6 +367,156 @@ function renderAsk() {
   }
 }
 
+/* ---------- risks, cooktop guard, energy (FR-2, FR-5) ---------- */
+
+const RISK_TEXT = {
+  mold: { title: "Washer mold", short: "washer mold risk",
+          what: "Wet laundry sealed in the drum" },
+  thermal: { title: "Kitchen heat", short: "kitchen heat",
+             what: "Heat from appliances and cooking" },
+};
+
+const ACTION_TEXT = {
+  ventilate_washer: "Air the washer drum",
+  dehumidifier_on: "Dehumidifier on",
+  purifier_on: "Air purifier on",
+  ventilate_kitchen: "Range hood on",
+  precool_kitchen: "Pre-cool the kitchen",
+  stop_dryer: "Stop the dryer",
+  preheat_cooktop: "Preheat the cooktop",
+  cooktop_auto_off: "Cooktop safety shut-off",
+};
+
+const AUDIT_TEXT = {
+  "risk.triggered": { text: "Risk detected", tone: "warn" },
+  "approval.proposed": { text: "Asked you", tone: "ask" },
+  "approval.confirmed": { text: "You said yes", tone: "ok" },
+  "approval.declined": { text: "You said no", tone: "plain" },
+  "approval.expired": { text: "No answer — nothing done", tone: "plain" },
+  "action.intent": { text: "About to act", tone: "plain" },
+  "action.executed": { text: "Done", tone: "ok" },
+  "action.failed": { text: "Device did not respond", tone: "bad" },
+  "action.blocked": { text: "Not carried out", tone: "plain" },
+  "notification.dryer_restart": { text: "Told you the dryer can restart", tone: "plain" },
+  "scenario.reset": { text: "Demo scenario loaded", tone: "plain" },
+};
+
+function riskWhy(r) {
+  const d = r.drivers || {};
+  if (r.kind === "mold") {
+    if (d.drum_humidity == null) return "Washer is empty or open.";
+    const parts = [`Drum ${Math.round(d.drum_humidity)}% humid`];
+    if (d.sealed_hours) parts.push(`shut for ${d.sealed_hours < 1
+      ? `${Math.round(d.sealed_hours * 60)} min` : `${d.sealed_hours.toFixed(1)} h`}`);
+    return parts.join(", ") + ".";
+  }
+  if (d.kitchen_temp == null) return "No heat source on or coming up.";
+  const parts = [`Kitchen ${d.kitchen_temp.toFixed(1)}°C`];
+  if (d.heat_load_w) parts.push(`${(d.heat_load_w / 1000).toFixed(1)} kW of heat`);
+  if (d.fridge_duty_cycle != null) parts.push(`fridge working ${Math.round(d.fridge_duty_cycle * 100)}%`);
+  if (d.cooking_scheduled_in_min != null) parts.push(`cooking in ${d.cooking_scheduled_in_min} min`);
+  return parts.join(", ") + ".";
+}
+
+function riskPrediction(r) {
+  if (r.predicted == null || r.current == null) return "";
+  const unit = r.kind === "mold" ? "%" : "°C";
+  const delta = r.predicted - r.current;
+  if (Math.abs(delta) < 0.2) return `Steady over the next 30 min.`;
+  return `${delta > 0 ? "Rising" : "Falling"} to ${r.predicted}${unit} in 30 min.`;
+}
+
+function fmtMin(sec) {
+  const m = Math.ceil(sec / 60);
+  return m <= 1 ? "under a minute" : `${m} min`;
+}
+
+function renderRisks() {
+  const box = $("#risks");
+  const risks = (pro && pro.risks) || {};
+  const quiet = (pro && pro.quiet) || {};
+  // While a question about a risk is open, the house *is* asking about it.
+  const asking = new Set(((pro && pro.pending_approvals) || []).map((a) => a.risk_kind));
+  box.innerHTML = ["mold", "thermal"].map((kind) => {
+    const r = risks[kind] || { kind, score: 0, threshold: 50, drivers: {} };
+    const t = RISK_TEXT[kind];
+    const score = Math.round(r.score || 0);
+    const level = r.firing ? "high" : score >= r.threshold * 0.6 ? "watch" : "low";
+    const label = { high: "Acting", watch: "Watching", low: "Fine" }[level];
+    const q = quiet[kind] > 0 && !asking.has(kind)
+      ?`<p class="risk-quiet">Won’t ask about this again for ${fmtMin(quiet[kind])}.</p>` : "";
+    return `<article class="risk" data-level="${level}">
+      <header class="risk-head">
+        <h3>${t.title}</h3>
+        <span class="risk-label">${label}</span>
+      </header>
+      <p class="risk-score"><strong>${score}</strong><span>/100</span></p>
+      <div class="risk-bar" role="meter" aria-label="${t.title} risk"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="${score}">
+        <span class="risk-fill" style="width:${Math.min(100, score)}%"></span>
+        <span class="risk-line" style="left:${r.threshold}%" title="acts at ${r.threshold}"></span>
+      </div>
+      <p class="risk-why">${esc(riskWhy(r))}</p>
+      <p class="risk-pred">${esc(riskPrediction(r))}</p>
+      ${q}
+    </article>`;
+  }).join("");
+}
+
+function renderGuard() {
+  const box = $("#guard");
+  const g = pro && pro.cooktop_guard;
+  if (!g) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  let line;
+  if (g.cooking) line = "Cooking in progress.";
+  else if (g.meal_in_min != null) line = `Waiting for cooking to start in ${Math.round(g.meal_in_min)} min.`;
+  else line = `Switches off in ${fmtMin(g.idle_off_in)} if no cooking starts.`;
+  box.innerHTML = `<svg viewBox="0 0 24 24"><use href="#i-cooktop"/></svg>
+    <div><strong>The cooktop is on and being watched.</strong>
+    <span>${esc(line)} It switches off by itself after ${fmtMin(g.max_off_in)} at most.</span></div>`;
+}
+
+const FULL_KITCHEN_W = 2500;   // risk.py: 2500 W counts as a full kitchen
+
+function renderEnergy() {
+  const box = $("#energy");
+  const w = (pro && pro.heat_load_w) || 0;
+  const pct = Math.min(100, Math.round((w / FULL_KITCHEN_W) * 100));
+  const level = w >= FULL_KITCHEN_W ? "high" : w >= FULL_KITCHEN_W * 0.6 ? "watch" : "low";
+  const app = (pro && pro.appliances) || {};
+  const on = [["oven", "oven"], ["cooktop", "cooktop"], ["dryer", "dryer"],
+              ["dish_washer", "dishwasher"], ["washer", "washer"]]
+    .filter(([k]) => app[k] && app[k].power).map(([, n]) => n);
+  box.dataset.level = level;
+  box.innerHTML = `<div class="energy-head">
+      <span>Heat-producing load</span>
+      <strong>${(w / 1000).toFixed(1)} kW</strong>
+    </div>
+    <div class="energy-bar" role="meter" aria-label="Heat-producing load"
+         aria-valuemin="0" aria-valuemax="${FULL_KITCHEN_W}" aria-valuenow="${w}">
+      <span style="width:${pct}%"></span>
+    </div>
+    <p class="energy-note">${on.length ? `Running: ${esc(on.join(", "))}.` : "No heating appliances running."}</p>`;
+}
+
+async function loadScenario(name) {
+  try {
+    await api("/api/scenario", { method: "POST", body: JSON.stringify({ name }) });
+    toast("Scenario loaded.");
+    askSig = "";
+    await refresh();
+  } catch (err) {
+    toast(`Could not load the scenario: ${err.message}`);
+  }
+}
+
+function askDevice(ap) {
+  const item = (ap.actions && ap.actions[0]) || {};
+  const kind = ap.action_kind || item.kind;
+  return `${item.device_name || "Appliance"} · ${ACTION_TEXT[kind] || kind || "action"}`;
+}
+
 /* ---------- the append-only trail (FR-6) ---------- */
 
 function renderAudit() {
@@ -378,14 +528,15 @@ function renderAudit() {
     return;
   }
   box.innerHTML = rows.slice(0, 8).map((r) => {
-    const meta = [r.action_kind,
-                  r.approval_id ? `approval ${r.approval_id}` : "",
-                  r.device_id, r.detail].filter(Boolean).join(" · ");
-    return `<div class="audit-row">
+    const ev = AUDIT_TEXT[r.event_type] || { text: r.event_type, tone: "plain" };
+    const what = ACTION_TEXT[r.action_kind] || r.action_kind || "";
+    const meta = [r.approval_id ? `request ${r.approval_id}` : "", r.detail]
+      .filter((x) => x && x !== "write-before-act").join(" · ");
+    return `<div class="audit-row" data-tone="${ev.tone}">
       <span class="audit-time">${esc(String(r.ts || "").slice(11, 19))}</span>
-      <span class="audit-event">${esc(r.event_type)}</span>
-      <span class="audit-status">${esc(r.execution_status || r.approval_status || "")}</span>
-      <span class="audit-meta">${esc(meta)}</span>
+      <span class="audit-event">${esc(ev.text)}${what ? ` <span class="audit-what">${esc(what)}</span>` : ""}</span>
+      <span class="audit-code" title="event type">${esc(r.event_type)}</span>
+      ${meta ? `<span class="audit-meta">${esc(meta)}</span>` : ""}
     </div>`;
   }).join("");
 }
@@ -396,7 +547,7 @@ async function answer(yes, id) {
   try {
     const res = await api(
       `/api/approvals/${encodeURIComponent(id)}/${yes ? "confirm" : "decline"}`,
-      { method: "POST" });
+      { method: "POST", body: JSON.stringify({ channel: "ui" }) });
     // The house reports `expired` when the deadline passed while the answer
     // was in flight, and `blocked` with a reason when revalidation refused
     // the action. Saying "Done." in either case would be a lie about devices.
@@ -883,6 +1034,9 @@ function renderAll() {
     `${BACKEND_LABEL[snapshot.backend] || snapshot.backend || ""} · ${snapshot.build || ""}`;
   renderStatus();
   renderAsk();
+  renderRisks();
+  renderGuard();
+  renderEnergy();
   renderAudit();
   renderRooms();
   renderDevices();
@@ -940,6 +1094,12 @@ async function switchTab(name) {
 
 document.addEventListener("click", (event) => {
   const target = event.target;
+
+  const scenarioBtn = target.closest("[data-scenario]");
+  if (scenarioBtn) {
+    loadScenario(scenarioBtn.dataset.scenario);
+    return;
+  }
 
   const answerBtn = target.closest("[data-answer]");
   if (answerBtn) {
