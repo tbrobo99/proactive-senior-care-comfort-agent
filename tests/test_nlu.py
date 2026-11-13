@@ -85,6 +85,18 @@ class ActionTest(unittest.TestCase):
         self.assertIn({"action": "mode", "value": "heat"}, r["actions"])
         self.assertIn({"action": "fan", "value": "low"}, r["actions"])
 
+    def test_heat_risk_explanation_is_not_a_heating_command(self):
+        r = parse("In one short sentence, explain the current kitchen heat risk.")
+        self.assertNotIn({"action": "mode", "value": "heat"}, r["actions"])
+
+    def test_adding_heat_question_is_not_a_heating_command(self):
+        r = parse("Why is the dryer adding heat?")
+        self.assertNotIn({"action": "mode", "value": "heat"}, r["actions"])
+
+    def test_direct_heat_request_still_selects_heating(self):
+        r = parse("heat the bedroom")
+        self.assertIn({"action": "mode", "value": "heat"}, r["actions"])
+
     def test_multiple_actions_in_one_sentence(self):
         r = parse("turn on the AC and set it to 26 degrees")
         kinds = {a["action"] for a in r["actions"]}
@@ -207,3 +219,4 @@ class ComputeNextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
