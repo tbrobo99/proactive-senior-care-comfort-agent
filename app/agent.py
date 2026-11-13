@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from . import agent_loop, build, db, food, llm, nlu, scenes
+from . import agent_loop, audit, build, db, food, llm, nlu, scenes
 from .devices.base import FAN_LABELS, MODE_LABELS, describe_action
 
 # how long a half-finished request stays open
@@ -668,7 +668,7 @@ class Agent:
             if not device.get("online", True):
                 outcomes.append((device["name"], False, "offline"))
                 continue
-            res = self.adapter.apply(device["id"], it["actions"])
+            res = audit.execute(self.adapter, device["id"], it["actions"])
             db.log("control", f"{device['name']} {it['actions']} -> {res.get('ok')}")
             outcomes.append((device["name"], bool(res.get("ok")), res.get("error")))
 
@@ -708,7 +708,7 @@ class Agent:
             return {"reply": f"{device['name']} is offline, so nothing was sent.",
                     "ok": False, "actions": []}
 
-        res = self.adapter.apply(device["id"], it["actions"])
+        res = audit.execute(self.adapter, device["id"], it["actions"])
         db.log("control", f"{device['name']} {it['actions']} -> {res.get('ok')}")
 
         if not res.get("ok"):
@@ -785,7 +785,7 @@ class Agent:
         failed: list[tuple[str, str]] = []
         actions: list[dict] = []
         for device, acts in plan:
-            res = self.adapter.apply(device["id"], acts)
+            res = audit.execute(self.adapter, device["id"], acts)
             db.log("scene", f"{it['scene']} {device['name']} {acts} -> {res.get('ok')}")
             if res.get("ok"):
                 done.append(device["name"])
@@ -986,7 +986,6 @@ class Agent:
     def action_summary(actions: list[dict]) -> str:
         return ", ".join(describe_action(a) for a in actions)
 
-    @staticmethod
     @staticmethod
     def _phrase_one(device_name: str, name, value, with_name: bool = True) -> str:
         """One action as a clause. `with_name` is off for every action after the

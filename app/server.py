@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import db
+from . import audit, db
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -75,7 +75,8 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------ routes
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        url = urlparse(self.path)
+        path = url.path
         if path in ("/", "/index.html"):
             return self._static("index.html")
         if path == "/api/snapshot":
@@ -87,9 +88,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             return self._json({"logs": db.recent_logs(60)})
         if path == "/api/audit":
-            q = parse_qs(urlparse(self.path).query)
-            return self._json({"audit": db.recent_audit(
-                100, approval_id=(q.get("approval_id") or [None])[0])})
+            # FR-6: the append-only trail is readable but never writable from
+            # the API. There is deliberately no POST/DELETE route for it.
+            try:
+                limit = max(1, min(200, int((parse_qs(url.query).get("limit") or ["40"])[0])))
+            except ValueError:
+                limit = 40
+            return self._json({"audit": db.recent_audit(limit)})
         if path == "/api/approvals":
             # Phase 2: Tier-2 requests waiting on the user. Absent engine ->
             # empty list, never a 500.
@@ -130,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
             actions = body.get("actions") or []
             if not device_id or not actions:
                 return self._json({"error": "device_id and actions are required"}, 400)
-            res = self.agent_ref.adapter.apply(device_id, actions)
+            res = audit.execute(self.agent_ref.adapter, device_id, actions)
             db.log("control.manual", f"{device_id} {actions} -> {res.get('ok')}")
             return self._json({**res, "snapshot": self.agent_ref.snapshot()})
 
@@ -151,9 +156,7 @@ class Handler(BaseHTTPRequestHandler):
             if engine is None:
                 return self._json({"error": "proactive engine not running"}, 400)
             fn = engine.confirm if m.group(2) == "confirm" else engine.decline
-            # Which surface the answer came from goes into the audit trail.
-            channel = str(body.get("channel") or "api")[:16]
-            return self._json(fn(m.group(1), channel=channel))
+            return self._json(fn(m.group(1)))
 
         return self._json({"error": "not found"}, 404)
 

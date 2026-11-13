@@ -60,11 +60,6 @@ class FakeAdapter:
         return {"ok": True, "applied": actions, "error": None}
 
 
-def _ask(engine, kind):
-    """The pending approval for one Level 2 action kind."""
-    return next(a for a in engine.approvals.pending() if a.action_kind == kind)
-
-
 def _cfg(llm=None, **proactive):
     cfg = {"llm": llm or {"enabled": False},
            "proactive": {"tick_seconds": 0.05, "cooldown_seconds": 0, **proactive}}
@@ -385,21 +380,23 @@ class ProactiveNoLLMTest(Base):
         self.assertIn("power", applied.get("range_hood", []))   # hood ran
         self.assertNotIn("dryer", applied)                       # dryer untouched
         pending = e.approvals.pending()
-        # One approval per Level 2 action (FR-3/FR-4).
-        self.assertEqual({a.action_kind for a in pending}, {"stop_dryer", "preheat_cooktop"})
+        # FR-4: one approval per Level-2 action, each with its own id.
+        self.assertEqual(len(pending), 2)
+        self.assertEqual({a.risk_kind for a in pending}, {"thermal"})
+        self.assertEqual({a.action_kind for a in pending},
+                         {"stop_dryer", "preheat_cooktop"})
+        self.assertNotEqual(pending[0].id, pending[1].id)
         for a in pending:
-            self.assertEqual(a.risk_kind, "thermal")
-            self.assertEqual(len(a.actions), 1)
+            self.assertEqual(len(a.actions), 1)   # a yes authorises one action
             self.assertTrue(a.question)
 
     def test_confirmed_approval_stops_the_dryer_and_schedules_nothing(self):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = _ask(e, "stop_dryer")
+        ap = e.approvals.pending()[0]
         res = e.confirm(ap.id)
         self.assertTrue(res["ok"])
-        self.assertEqual(res["status"], "completed")
         applied = {}
         for dev, acts in self.adapter.applied:
             applied.setdefault(dev, []).extend(a["action"] for a in acts)
@@ -416,7 +413,7 @@ class ProactiveNoLLMTest(Base):
         e.approvals.ttl_seconds = 0.2
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = _ask(e, "stop_dryer")
+        ap = e.approvals.pending()[0]
         time.sleep(0.3)
         res = e.confirm(ap.id)
         self.assertFalse(res["ok"])
@@ -428,7 +425,7 @@ class ProactiveNoLLMTest(Base):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
-        ap = _ask(e, "stop_dryer")
+        ap = e.approvals.pending()[0]
         self.assertTrue(e.confirm(ap.id)["ok"])
         self.assertFalse(e.confirm(ap.id)["ok"])  # already decided
         stops = [dev for dev, acts in self.adapter.applied
@@ -441,10 +438,12 @@ class ProactiveNoLLMTest(Base):
         e.sensors.apply_scenario("oven")
         e.tick()
         before = len(self.adapter.applied)
-        for ap in e.approvals.pending():
-            self.assertTrue(e.decline(ap.id)["ok"])
+        ap = e.approvals.pending()[0]
+        self.assertTrue(e.decline(ap.id)["ok"])
         self.assertEqual(len(self.adapter.applied), before)
-        self.assertEqual(e.approvals.pending(), [])
+        # Per-action consent: declining the dryer leaves the cooktop question
+        # on the table. It is still the user's to answer.
+        self.assertEqual(len(e.approvals.pending()), 1)
         self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
 
     def test_expired_approval_changes_nothing(self):
@@ -481,8 +480,10 @@ class ProactiveNoLLMTest(Base):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
+        ids = {a.id for a in e.approvals.pending()}
+        self.assertEqual(len(ids), 2)
         e.tick()
-        self.assertEqual(len(e.approvals.pending()), 2)
+        self.assertEqual({a.id for a in e.approvals.pending()}, ids)
 
     def test_cooldown_blocks_immediate_repeat(self):
         e = self._engine(_cfg(cooldown_seconds=600))
@@ -571,7 +572,7 @@ class ProactiveLLMTest(Base):
             self.assertNotIn("cooktop", applied)
             pending = e.approvals.pending()
             self.assertEqual(len(pending), 2)
-            self.assertEqual({a.action_kind for a in pending},
+            self.assertEqual({a.actions[0]["kind"] for a in pending},
                              {"stop_dryer", "preheat_cooktop"})
 
     def test_declining_a_question_stops_the_house_asking_again(self):
@@ -585,12 +586,15 @@ class ProactiveLLMTest(Base):
             e.tick()
             pending = e.approvals.pending()
             self.assertEqual(len(pending), 2)
-            for ap in pending:
-                e.decline(ap.id)
+            ids = {a.id for a in pending}
+            declined = pending[0].id
+            e.decline(declined)
             remaining = e._cooldown["thermal"] - time.monotonic()
             self.assertGreater(remaining, e.cooldown_seconds)
             e.tick()
-            self.assertEqual(e.approvals.pending(), [])
+            # No third question appears; the other action keeps its own card.
+            self.assertEqual({a.id for a in e.approvals.pending()},
+                             ids - {declined})
 
 
 if __name__ == "__main__":

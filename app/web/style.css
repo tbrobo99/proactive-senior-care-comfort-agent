@@ -247,6 +247,38 @@ button:active { opacity: .92; }
   font-variant-numeric: tabular-nums;
 }
 
+/* FR-4: an independent card for each Level-2 action. */
+#askQueue:empty { display: none; }
+#askQueue .ask + .ask { margin-top: 10px; }
+.ask-index { margin-left: auto; color: var(--ink-3); font-size: 0.78rem; }
+.ask-action {
+  margin: -6px 0 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--amber);
+  word-break: break-word;
+}
+
+/* FR-6: the append-only trail, readable but never editable in the UI. */
+.sec-note { font-size: 0.76rem; font-weight: 700; color: var(--ink-3); }
+.audit { border: 1px solid var(--line); border-radius: var(--radius-block); overflow: hidden; }
+.audit-row {
+  display: grid;
+  grid-template-columns: 62px 1fr auto;
+  gap: 4px 8px;
+  align-items: baseline;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.audit-row:first-child { border-top: 0; }
+.audit-time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.audit-event { font-weight: 700; color: var(--ink); word-break: break-word; }
+.audit-status { font-size: 0.74rem; font-weight: 700; color: var(--ink-2); }
+.audit-meta { grid-column: 2 / -1; font-size: 0.76rem; color: var(--ink-3); }
+.audit-empty { margin: 0; padding: 12px; font-size: 0.82rem; color: var(--ink-3); }
+
 /* The house's last answer, kept on screen until the next one. A reply that
    disappears after 2.6 s is not an answer for someone who reads slowly. */
 .reply {
