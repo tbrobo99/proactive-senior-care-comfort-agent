@@ -20,5 +20,10 @@
   "agent": {
     "default_room": "Living Room",
     "mode": "cascade"
+  },
+  "proactive": {
+    "cooktop_require_presence": true,
+    "cooktop_no_cook_timeout": 300,
+    "cooktop_max_runtime": 1800
   }
 }

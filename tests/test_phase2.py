@@ -380,9 +380,15 @@ class ProactiveNoLLMTest(Base):
         self.assertIn("power", applied.get("range_hood", []))   # hood ran
         self.assertNotIn("dryer", applied)                       # dryer untouched
         pending = e.approvals.pending()
-        self.assertEqual(len(pending), 1)
-        self.assertEqual(pending[0].risk_kind, "thermal")
-        self.assertTrue(pending[0].question)
+        # FR-4: one approval per Level-2 action, each with its own id.
+        self.assertEqual(len(pending), 2)
+        self.assertEqual({a.risk_kind for a in pending}, {"thermal"})
+        self.assertEqual({a.action_kind for a in pending},
+                         {"stop_dryer", "preheat_cooktop"})
+        self.assertNotEqual(pending[0].id, pending[1].id)
+        for a in pending:
+            self.assertEqual(len(a.actions), 1)   # a yes authorises one action
+            self.assertTrue(a.question)
 
     def test_confirmed_approval_stops_the_dryer_and_schedules_nothing(self):
         e = self._engine()
@@ -435,7 +441,9 @@ class ProactiveNoLLMTest(Base):
         ap = e.approvals.pending()[0]
         self.assertTrue(e.decline(ap.id)["ok"])
         self.assertEqual(len(self.adapter.applied), before)
-        self.assertEqual(e.approvals.pending(), [])
+        # Per-action consent: declining the dryer leaves the cooktop question
+        # on the table. It is still the user's to answer.
+        self.assertEqual(len(e.approvals.pending()), 1)
         self.assertEqual([j for j in db.list_jobs() if j["device_id"] == "dryer"], [])
 
     def test_expired_approval_changes_nothing(self):
@@ -472,8 +480,10 @@ class ProactiveNoLLMTest(Base):
         e = self._engine()
         e.sensors.apply_scenario("oven")
         e.tick()
+        ids = {a.id for a in e.approvals.pending()}
+        self.assertEqual(len(ids), 2)
         e.tick()
-        self.assertEqual(len(e.approvals.pending()), 1)
+        self.assertEqual({a.id for a in e.approvals.pending()}, ids)
 
     def test_cooldown_blocks_immediate_repeat(self):
         e = self._engine(_cfg(cooldown_seconds=600))
@@ -561,8 +571,8 @@ class ProactiveLLMTest(Base):
             self.assertNotIn("dryer", applied)     # a Tier-2 action never runs by itself
             self.assertNotIn("cooktop", applied)
             pending = e.approvals.pending()
-            self.assertEqual(len(pending), 1)
-            self.assertEqual({a["kind"] for a in pending[0].actions},
+            self.assertEqual(len(pending), 2)
+            self.assertEqual({a.actions[0]["kind"] for a in pending},
                              {"stop_dryer", "preheat_cooktop"})
 
     def test_declining_a_question_stops_the_house_asking_again(self):
@@ -575,12 +585,16 @@ class ProactiveLLMTest(Base):
             e.sensors.apply_scenario("oven")
             e.tick()
             pending = e.approvals.pending()
-            self.assertEqual(len(pending), 1)
-            e.decline(pending[0].id)
+            self.assertEqual(len(pending), 2)
+            ids = {a.id for a in pending}
+            declined = pending[0].id
+            e.decline(declined)
             remaining = e._cooldown["thermal"] - time.monotonic()
             self.assertGreater(remaining, e.cooldown_seconds)
             e.tick()
-            self.assertEqual(e.approvals.pending(), [])
+            # No third question appears; the other action keeps its own card.
+            self.assertEqual({a.id for a in e.approvals.pending()},
+                             ids - {declined})
 
 
 if __name__ == "__main__":

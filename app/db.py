@@ -53,6 +53,30 @@ CREATE TABLE IF NOT EXISTS logs (
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_next ON jobs(enabled, next_run_at);
+
+-- FR-6: append-only audit trail. The two triggers make UPDATE and DELETE
+-- fail at the database level, so no application code can rewrite history.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT NOT NULL,
+    event_type       TEXT NOT NULL,
+    risk_kind        TEXT,
+    risk_score       REAL,
+    action_kind      TEXT,
+    tier             TEXT,
+    approval_id      TEXT,
+    approval_status  TEXT,
+    execution_status TEXT,
+    decision_source  TEXT,
+    channel          TEXT,
+    device_id        TEXT,
+    detail           TEXT
+);
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 """
 
 
@@ -211,4 +235,39 @@ def recent_logs(limit: int = 50) -> list[dict]:
         rows = c.execute(
             "SELECT * FROM logs ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------- audit trail (FR-6) ----------------
+
+_AUDIT_FIELDS = ("risk_kind", "risk_score", "action_kind", "tier",
+                 "approval_id", "approval_status", "execution_status",
+                 "decision_source", "channel", "device_id", "detail")
+
+
+def audit_write(event_type: str, **fields) -> int:
+    """Append one row. Deliberately raises on failure: a caller that must be
+    write-before-act needs to know the intent was not recorded."""
+    cols = ", ".join(_AUDIT_FIELDS)
+    marks = ", ".join("?" for _ in _AUDIT_FIELDS)
+    sql = (f"INSERT INTO audit_log (ts, event_type, {cols}) "
+           f"VALUES (?, ?, {marks})")
+    # Timezone-aware ISO 8601, as the specification asks for.
+    ts = datetime.now().astimezone().isoformat(timespec="milliseconds")
+    values = [ts, event_type] + [fields.get(k) for k in _AUDIT_FIELDS]
+    with _lock, conn() as c:
+        cur = c.execute(sql, values)
+        return int(cur.lastrowid)
+
+
+def recent_audit(limit: int = 100, event_type: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM audit_log"
+    args: list = []
+    if event_type:
+        sql += " WHERE event_type=?"
+        args.append(event_type)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _lock, conn() as c:
+        rows = c.execute(sql, args).fetchall()
     return [dict(r) for r in rows]

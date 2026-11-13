@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from . import db, nlu
+from . import audit, db, nlu
 from .devices.base import (FAN_LABELS, MODE_LABELS, capabilities_of,
                            describe_action, normalize_action, temperature_range)
 
@@ -374,7 +374,7 @@ class ToolBox:
                     "temperature_range": "-".join(
                         str(x) for x in temperature_range(d)) + " \u00b0C"}
 
-        res = self.adapter.apply(d["id"], clean)
+        res = audit.execute(self.adapter, d["id"], clean)
         if not res.get("ok"):
             return {"error": res.get("error") or "the device rejected the command",
                     "device": d["name"]}

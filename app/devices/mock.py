@@ -8,6 +8,7 @@ Lets the whole pipeline run without an LG account, a PAT, or hardware:
 from __future__ import annotations
 
 import json
+import os
 import random
 import threading
 from pathlib import Path
@@ -15,7 +16,11 @@ from pathlib import Path
 from .base import CAPABILITIES, TYPE_LABELS, DeviceAdapter, temperature_range
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-STATE_PATH = ROOT / "data" / "mock_state.json"
+# Simulated device state lives with the rest of the demo data. Two demo servers
+# with different DATA_DIR must not overwrite each other's appliance states, and
+# a fresh DATA_DIR has to start from DEFAULT_STATES rather than a stale run.
+DATA_DIR = Path(os.environ.get("DATA_DIR") or (ROOT / "data"))
+STATE_PATH = DATA_DIR / "mock_state.json"
 
 DEVICES = [
     {"id": "ac_living", "name": "Living Room AC", "type": "air_conditioner", "room": "Living Room"},

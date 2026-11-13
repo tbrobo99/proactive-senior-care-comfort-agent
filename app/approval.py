@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import db
+from . import audit, db
 
 
 @dataclass
@@ -26,11 +26,22 @@ class Approval:
     risk_kind: str
     question: str                 # what the user is asked, in plain language
     summary: str                  # one-line audit line
-    actions: list = field(default_factory=list)   # Candidate dicts
+    actions: list = field(default_factory=list)   # exactly one Candidate dict
     created_at: str = ""
     expires_at: str = ""
     status: str = "pending"       # pending | confirmed | declined | expired
     decided_by: str = ""
+    channel: str = "ui"           # where the answer came from
+    risk_score: float | None = None
+    action_kind: str = ""         # the single action this approval authorises
+    tier: str = "tier2"
+    decision_source: str = "rules"
+    proposed_state: dict = field(default_factory=dict)
+    # Set when the "approval.confirmed" event itself could not be persisted.
+    # FR-6 write-before-act: a confirmation whose audit row is missing must not
+    # reach the adapter. audit.execute() checks the intent write independently;
+    # this closes the gap between the queue and the engine.
+    audit_ok: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -38,7 +49,37 @@ class Approval:
             "summary": self.summary, "actions": self.actions,
             "created_at": self.created_at, "expires_at": self.expires_at,
             "status": self.status, "decided_by": self.decided_by,
+            "channel": self.channel, "risk_score": self.risk_score,
+            "action_kind": self.action_kind, "tier": self.tier,
         }
+
+    def audit_ctx(self) -> dict:
+        """The fields every event about this approval carries (FR-6)."""
+        return {
+            "risk_kind": self.risk_kind, "risk_score": self.risk_score,
+            "action_kind": self.action_kind, "tier": self.tier,
+            "approval_id": self.id, "approval_status": self.status,
+            "decision_source": self.decision_source, "channel": self.channel,
+        }
+
+
+def _audit(event: str, ap: Approval, **extra) -> bool:
+    """Append one event about an approval.
+
+    Returns False when the row could not be written. The queue still decides
+    the request — a missing audit row is not a user's "yes" — but the engine
+    must not act on a confirmation whose trail is incomplete.
+    """
+    try:
+        audit.record(event, **ap.audit_ctx(), **extra)
+        return True
+    except Exception as exc:
+        db.log("audit.write_failed", f"{event} {ap.id}: {exc}", "error")
+        return False
+
+
+def _device_of(ap: Approval) -> str:
+    return (ap.actions or [{}])[0].get("device_id", "") or ""
 
 
 class ApprovalQueue:
@@ -55,7 +96,12 @@ class ApprovalQueue:
     # ---------------------------------------------------------------- propose
 
     def propose(self, *, risk_kind: str, question: str, summary: str,
-                actions: list, ttl_seconds: int | None = None) -> Approval:
+                actions: list, ttl_seconds: int | None = None,
+                risk_score: float | None = None, action_kind: str = "",
+                decision_source: str = "rules", tier: str = "tier2",
+                proposed_state: dict | None = None,
+                channel: str = "ui") -> Approval:
+        """One approval authorises exactly one action (FR-4 per-action consent)."""
         ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
         now = datetime.now()
         ap = Approval(
@@ -69,15 +115,22 @@ class ApprovalQueue:
             # against a microsecond `now` expires up to a second early, and a
             # fail-safe that fires early is a fail-safe that lies.
             expires_at=(now + _seconds(ttl)).isoformat(),
+            channel=channel,
+            risk_score=risk_score,
+            action_kind=action_kind or ((actions or [{}])[0].get("kind") or ""),
+            tier=tier,
+            decision_source=decision_source,
+            proposed_state=dict(proposed_state or {}),
         )
         with self._lock:
             self._items[ap.id] = ap
         db.log("approval.propose", f"{ap.id} {risk_kind}: {summary} (ttl {ttl}s)")
+        _audit("approval.proposed", ap, device_id=_device_of(ap), detail=summary)
         return ap
 
     # ---------------------------------------------------------------- decide
 
-    def confirm(self, approval_id: str) -> Approval | None:
+    def confirm(self, approval_id: str, channel: str = "ui") -> Approval | None:
         """Mark confirmed. The caller executes the actions; this only decides."""
         with self._lock:
             ap = self._items.get(approval_id)
@@ -95,20 +148,30 @@ class ApprovalQueue:
                     db.log("approval.expired",
                            f"{approval_id} {ap.risk_kind}: answered after the "
                            f"window; nothing was changed")
+                    _audit("approval.expired", ap, device_id=_device_of(ap),
+                           detail="answered after the deadline; nothing executed")
+                    audit.blocked("answered after the deadline",
+                                  context=ap.audit_ctx(), device_id=_device_of(ap))
                     return None
             except ValueError:
                 pass  # no deadline recorded: nothing to enforce
-            ap.status, ap.decided_by = "confirmed", "user"
+            ap.status, ap.decided_by, ap.channel = "confirmed", "user", channel
         db.log("approval.confirm", f"{approval_id} {ap.risk_kind}")
+        if not _audit("approval.confirmed", ap, device_id=_device_of(ap),
+                      detail=ap.summary):
+            ap.audit_ok = False
         return ap
 
-    def decline(self, approval_id: str) -> Approval | None:
+    def decline(self, approval_id: str, channel: str = "ui") -> Approval | None:
         with self._lock:
             ap = self._items.get(approval_id)
             if not ap or ap.status != "pending":
                 return None
-            ap.status, ap.decided_by = "declined", "user"
+            ap.status, ap.decided_by, ap.channel = "declined", "user", channel
         db.log("approval.decline", f"{approval_id} {ap.risk_kind}")
+        _audit("approval.declined", ap, device_id=_device_of(ap), detail=ap.summary)
+        audit.blocked("user declined the request", context=ap.audit_ctx(),
+                      device_id=_device_of(ap))
         return ap
 
     # ---------------------------------------------------------------- expire
@@ -140,6 +203,10 @@ class ApprovalQueue:
         for ap in expired:
             db.log("approval.expired",
                    f"{ap.id} {ap.risk_kind}: no response within the window; nothing was changed")
+            _audit("approval.expired", ap, device_id=_device_of(ap),
+                   detail="no response within the window; nothing executed")
+            audit.blocked("approval expired", context=ap.audit_ctx(),
+                          device_id=_device_of(ap))
         return expired
 
     # ---------------------------------------------------------------- read

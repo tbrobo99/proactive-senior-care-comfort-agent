@@ -11,7 +11,7 @@ import threading
 import traceback
 from datetime import datetime
 
-from . import db, nlu
+from . import audit, db, nlu
 from .devices.base import describe_action
 
 
@@ -95,7 +95,7 @@ class Scheduler:
         elif not device.get("online", True):
             result = "Failed: device offline"
         else:
-            res = self.adapter.apply(job["device_id"], job["actions"])
+            res = audit.execute(self.adapter, job["device_id"], job["actions"])
             done = ", ".join(describe_action(a) for a in job["actions"])
             result = f"Success: {done}" if res.get("ok") else f"Failed: {res.get('error')}"
 

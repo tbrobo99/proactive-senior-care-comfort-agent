@@ -109,23 +109,10 @@
       <p class="reply-text" id="replyText"></p>
     </div>
 
-    <!-- A Tier-2 request waiting for an answer. The proposal's centrepiece:
-         big question, two big answers, a clock that is honest about running out. -->
-    <div class="ask" id="ask" hidden>
-      <p class="ask-kicker">The house is asking</p>
-      <p class="ask-question" id="askQuestion"></p>
-      <div class="ask-answers">
-        <button class="answer yes" id="askYes">
-          <svg viewBox="0 0 24 24"><use href="#i-check"/></svg>
-          <span>Yes<small>네</small></span>
-        </button>
-        <button class="answer no" id="askNo">
-          <svg viewBox="0 0 24 24"><use href="#i-x"/></svg>
-          <span>No<small>아니요</small></span>
-        </button>
-      </div>
-      <p class="ask-clock" id="askClock"></p>
-    </div>
+    <!-- FR-4: one card per Level-2 action. Every card carries its own
+         question, approval_id and clock, so a Yes on one cannot authorise
+         another. Cards are rendered from GET /api/approvals. -->
+    <div id="askQueue" aria-live="polite"></div>
 
     <div class="sec-head"><h2>Quick actions</h2></div>
     <div class="quick" id="quick"></div>
@@ -137,6 +124,15 @@
       <h2 id="deviceHead">Devices</h2>
     </div>
     <div class="devices" id="devices"></div>
+
+    <!-- FR-6: the append-only trail, visible to the user. Read-only here. -->
+    <div class="sec-head">
+      <h2>Safety log</h2>
+      <span class="sec-note">append-only</span>
+    </div>
+    <div class="audit" id="auditLog">
+      <p class="audit-empty">No recorded events yet.</p>
+    </div>
 
     <!-- Which process answered. A version number belongs at the foot of the
          screen, not in the title bar where it reads as debug output. -->

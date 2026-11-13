@@ -32,9 +32,10 @@ let activeRoom = "All";
 let currentTab = "home";
 let sheetId = null;
 let chipsSig = "";
-let askId = null;
+let askSig = "";          // signature of the pending approval queue
 let askBusy = false;
-let lastSpokenAsk = null;
+let spokenAsks = new Set();
+let auditRows = null;     // /api/audit, FR-6 trail
 
 /* ---------- helpers ---------- */
 
@@ -295,8 +296,11 @@ function renderLangButton() {
 function houseStatus() {
   const pending = (pro && pro.pending_approvals) || [];
   if (pending.length) {
-    return { tone: "ask", line: "The house is waiting for your answer.",
-             detail: "Answer below — silence changes nothing." };
+    return { tone: "ask",
+             line: pending.length === 1
+               ? "The house is waiting for your answer."
+               : `The house is waiting for ${pending.length} answers.`,
+             detail: "Each question has its own Yes / No — silence changes nothing." };
   }
   const active = (pro && pro.active) || {};
   if (active.mold) {
@@ -317,49 +321,87 @@ function renderStatus() {
   $("#statusDetail").textContent = s.detail;
 }
 
-/* ---------- the ask: Tier-2, waiting for an answer ---------- */
-
-function currentAsk() {
-  const list = (pro && pro.pending_approvals) || [];
-  return list.length ? list[0] : null;
-}
+/* ---------- the ask: one card per Level-2 action (FR-4) ---------- */
 
 function renderAsk() {
-  const ap = currentAsk();
-  const box = $("#ask");
-  if (!ap) {
-    box.hidden = true;
-    askId = null;
-    $("#askClock").textContent = "";
-    return;
-  }
-  box.hidden = false;
-  if (askId !== ap.id) {
-    askId = ap.id;
-    $("#askQuestion").textContent = ap.question || ap.summary || "";
-    // A question nobody hears is a question nobody answered. It is read out
-    // whether or not read-aloud is on.
-    if (lastSpokenAsk !== ap.id) {
-      lastSpokenAsk = ap.id;
-      speak(ap.question || ap.summary, true);
+  const list = (pro && pro.pending_approvals) || [];
+  const box = $("#askQueue");
+  const sig = list.map((a) => a.id).join("|");
+  if (sig !== askSig) {
+    askSig = sig;
+    box.innerHTML = list.map((ap, i) => {
+      const kind = ap.action_kind || (ap.actions && ap.actions[0] && ap.actions[0].kind) || "action";
+      return `
+        <div class="ask" data-ask="${esc(ap.id)}">
+          <p class="ask-kicker">The house is asking
+            <span class="ask-index">${i + 1} of ${list.length}</span></p>
+          <p class="ask-action">${esc(kind)} · id ${esc(ap.id)}</p>
+          <p class="ask-question">${esc(ap.question || ap.summary || "")}</p>
+          <div class="ask-answers">
+            <button class="answer yes" data-answer="yes" data-id="${esc(ap.id)}">
+              <svg viewBox="0 0 24 24"><use href="#i-check"/></svg>
+              <span>Yes<small>네</small></span>
+            </button>
+            <button class="answer no" data-answer="no" data-id="${esc(ap.id)}">
+              <svg viewBox="0 0 24 24"><use href="#i-x"/></svg>
+              <span>No<small>아니요</small></span>
+            </button>
+          </div>
+          <p class="ask-clock" data-clock="${esc(ap.id)}"></p>
+        </div>`;
+    }).join("");
+    // Spoken prompts are supplementary (FR-4). Two text-to-speech questions
+    // in a row cut each other off, so announce the first new card per batch.
+    if (list.length && !spokenAsks.has(list[0].id)) {
+      spokenAsks.add(list[0].id);
+      speak(list[0].question || list[0].summary, true);
     }
   }
-  const left = Math.max(0, (new Date(ap.expires_at).getTime() - Date.now()) / 1000);
-  $("#askClock").textContent = left > 0
-    ? `Answer within ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")} — no answer changes nothing.`
-    : "Time is up — nothing was changed.";
+  for (const ap of list) {
+    const el = box.querySelector(`[data-clock="${ap.id}"]`);
+    if (!el) continue;
+    const left = Math.max(0, (new Date(ap.expires_at).getTime() - Date.now()) / 1000);
+    el.textContent = left > 0
+      ? `Answer within ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")} — no answer changes nothing.`
+      : "Time is up — nothing was changed.";
+  }
 }
 
-async function answer(yes) {
-  if (askBusy || !askId) return;
+/* ---------- the append-only trail (FR-6) ---------- */
+
+function renderAudit() {
+  const box = $("#auditLog");
+  if (!box) return;
+  const rows = auditRows || [];
+  if (!rows.length) {
+    box.innerHTML = '<p class="audit-empty">No recorded events yet.</p>';
+    return;
+  }
+  box.innerHTML = rows.slice(0, 8).map((r) => {
+    const meta = [r.action_kind,
+                  r.approval_id ? `approval ${r.approval_id}` : "",
+                  r.device_id, r.detail].filter(Boolean).join(" · ");
+    return `<div class="audit-row">
+      <span class="audit-time">${esc(String(r.ts || "").slice(11, 19))}</span>
+      <span class="audit-event">${esc(r.event_type)}</span>
+      <span class="audit-status">${esc(r.execution_status || r.approval_status || "")}</span>
+      <span class="audit-meta">${esc(meta)}</span>
+    </div>`;
+  }).join("");
+}
+
+async function answer(yes, id) {
+  if (askBusy || !id) return;
   askBusy = true;
   try {
-    const res = await api(`/api/approvals/${askId}/${yes ? "confirm" : "decline"}`, { method: "POST" });
+    const res = await api(
+      `/api/approvals/${encodeURIComponent(id)}/${yes ? "confirm" : "decline"}`,
+      { method: "POST" });
     // The house reports `expired` when the deadline passed while the answer
-    // was in flight. Saying "Done." there would be a lie about the devices,
-    // and this is the one screen where a lie matters.
+    // was in flight, and `blocked` with a reason when revalidation refused
+    // the action. Saying "Done." in either case would be a lie about devices.
     if (res && res.expired) toast("Too late — nothing was changed.");
-    else if (res && res.ok === false) toast("That request had already closed.");
+    else if (res && res.ok === false) toast(res.reason || res.error || "That request had already closed.");
     else toast(yes ? "Done." : "Nothing changed.");
     await refresh();
     loadMessages().catch(() => {});
@@ -841,6 +883,7 @@ function renderAll() {
     `${BACKEND_LABEL[snapshot.backend] || snapshot.backend || ""} · ${snapshot.build || ""}`;
   renderStatus();
   renderAsk();
+  renderAudit();
   renderRooms();
   renderDevices();
   if (!$("#quick").children.length) renderQuick();
@@ -852,12 +895,14 @@ function renderAll() {
 
 async function refresh() {
   try {
-    const [snap, state] = await Promise.all([
+    const [snap, state, trail] = await Promise.all([
       api("/api/snapshot"),
       api("/api/proactive").catch(() => null),
+      api("/api/audit?limit=12").catch(() => null),
     ]);
     snapshot = snap;
     pro = state;
+    auditRows = trail && trail.audit;
     renderAll();
   } catch (err) {
     /* keep the last good snapshot rather than blanking the screen */
@@ -896,9 +941,9 @@ async function switchTab(name) {
 document.addEventListener("click", (event) => {
   const target = event.target;
 
-  const answerBtn = target.closest("#askYes, #askNo");
+  const answerBtn = target.closest("[data-answer]");
   if (answerBtn) {
-    answer(answerBtn.id === "askYes");
+    answer(answerBtn.dataset.answer === "yes", answerBtn.dataset.id);
     return;
   }
 

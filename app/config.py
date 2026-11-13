@@ -27,6 +27,15 @@ DEFAULTS: dict = {
         "model": "gpt-4o-mini",
         "timeout": 20,
     },
+    # FR-5 safety windows, in seconds. The simulator has no stove sensor: an
+    # active cooking session on the local calendar, or a running oven, is the
+    # only honest "cooking detected" signal. These are wall-clock limits, not
+    # a number of API calls or ticks.
+    "proactive": {
+        "cooktop_require_presence": True,
+        "cooktop_no_cook_timeout": 300,
+        "cooktop_max_runtime": 1800,
+    },
     "agent": {
         # used when the user does not name a room
         "default_room": "Living Room",
